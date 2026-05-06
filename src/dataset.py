@@ -135,6 +135,22 @@ class DeepFashionDataset(Dataset):
 
             x1, y1, x2, y2 = self.img_to_bbox[rel_path]
 
+            # Fix invalid bbox annotations
+            if x2 <= x1 or y2 <= y1:
+                return image
+            
+            # Clamp to image boundaries
+            w, h = image.size
+            
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(1, min(x2, w))
+            
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(1, min(y2, h))
+            
+            if x2 <= x1 or y2 <= y1:
+                return image
+            
             image = image.crop((x1, y1, x2, y2))
 
         return image
