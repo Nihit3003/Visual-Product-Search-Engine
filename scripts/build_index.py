@@ -162,7 +162,7 @@ def main():
 
     t0 = time.time()
     for rel_path in tqdm(gallery_paths, desc="Indexing gallery"):
-        full_path = str(root / rel_path)
+        full_path = str(root / "img" / rel_path)
         img = open_image_safe(full_path)
         if img is None:
             continue
