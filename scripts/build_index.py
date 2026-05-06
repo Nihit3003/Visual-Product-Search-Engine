@@ -105,8 +105,7 @@ def main():
     root = Path(args.dataset_root)
 
     # ── Parse data files ─────────────────────
-    splits      = parse_eval_partition(str(root / "list_eval_partition.txt"))
-    img_to_item = parse_item_ids(str(root / "list_description_inshop.txt"))
+    splits, img_to_item = parse_eval_partition(str(root / "list_eval_partition.txt"))
     img_to_bbox = parse_bboxes(str(root / "list_bbox_inshop.txt"))
 
     gallery_paths = splits["gallery"]
