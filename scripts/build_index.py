@@ -152,7 +152,7 @@ def main():
             embs = img_embs
 
         index.add(
-            embeddings=embs.cpu().numpy(),
+            embeddings=embs.detach().cpu().numpy(),
             item_ids=batch_items[:],
             img_paths=batch_paths[:],
             captions=caps,
