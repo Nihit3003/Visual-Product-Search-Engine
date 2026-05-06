@@ -60,7 +60,7 @@ def get_args():
     p.add_argument("--output_dir",      required=True)
     p.add_argument("--epochs",          type=int,   default=10)
     p.add_argument("--batch_size",      type=int,   default=128)
-    p.add_argument("--lr",              type=float, default=1e-4)
+    p.add_argument("--lr",              type=float, default=5e-6)
     p.add_argument("--weight_decay",    type=float, default=1e-4)
     p.add_argument("--temperature",     type=float, default=0.07)
     p.add_argument("--unfreeze_last_n", type=int,   default=4)
