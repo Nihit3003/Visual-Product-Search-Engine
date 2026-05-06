@@ -287,31 +287,31 @@ def build_dataloaders(
 
         if split == "train":
 
-    sampler = ClassBalancedSampler(
-        dataset,
-        classes_per_batch=batch_size // 4,
-        samples_per_class=4,
-    )
+            sampler = ClassBalancedSampler(
+                dataset,
+                classes_per_batch=batch_size // 4,
+                samples_per_class=4,
+            )
 
-    loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-            num_workers=num_workers,
-            pin_memory=True,
-            drop_last=True,
-        )
-    
-    else:
-    
-        loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=True,
-            drop_last=False,
-        )
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                sampler=sampler,
+                num_workers=num_workers,
+                pin_memory=True,
+                drop_last=True,
+            )
+
+        else:
+
+            loader = DataLoader(
+                dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=True,
+                drop_last=False,
+            )
 
         loaders[split] = loader
 
