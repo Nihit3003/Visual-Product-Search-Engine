@@ -172,7 +172,7 @@ def train():
         pct_start=args.warmup_epochs / args.epochs,
         anneal_strategy="cos", div_factor=25, final_div_factor=1e4,
     )
-    scaler = GradScaler(enabled=(device == "cuda"))
+    scaler = GradScaler(enabled=False)
 
     # ── Resume ───────────────────────────────
     start_epoch = 0
@@ -200,15 +200,17 @@ def train():
             labels = labels.to(device)
 
             optimizer.zero_grad()
-            with autocast(enabled=(device == "cuda")):
-                embs = model.encode_image(imgs)
-                loss = criterion(embs, labels)
+            embs = model.encode_image(imgs)
+            loss = criterion(embs, labels)
 
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.trainable_params(), args.grad_clip)
-            scaler.step(optimizer)
-            scaler.update()
+            loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(
+                model.trainable_params(),
+                args.grad_clip
+            )
+            
+            optimizer.step()
             scheduler.step()
 
             epoch_loss += loss.item()
