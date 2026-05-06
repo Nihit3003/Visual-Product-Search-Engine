@@ -40,8 +40,12 @@ from tqdm import tqdm
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.dataset import build_dataloaders, get_clip_transform, \
-    parse_eval_partition, parse_item_ids, parse_bboxes, DeepFashionDataset
+from src.dataset import (
+    build_dataloaders,
+    get_clip_transform,
+    parse_eval_partition,
+    parse_bboxes,
+)
 from src.model   import VisualSearchModel, SupConLoss
 from src.metrics import evaluate, MetricResults
 
