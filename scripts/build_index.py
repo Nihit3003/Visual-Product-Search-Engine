@@ -34,7 +34,7 @@ from tqdm import tqdm
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.dataset   import parse_eval_partition, parse_item_ids, parse_bboxes
+from src.dataset import parse_eval_partition, parse_bboxes
 from src.model     import VisualSearchModel
 from src.blip_module import FashionCaptioner
 from src.localizer import YOLOLocalizer
