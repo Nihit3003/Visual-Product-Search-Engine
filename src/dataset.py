@@ -236,7 +236,7 @@ def build_dataloaders(
     partition_file = root / "list_eval_partition.txt"
     bbox_file = root / "list_bbox_inshop.txt"
 
-    img_root = root
+    img_root = root / "img"
 
     # FIXED PARSER
     splits, img_to_item = parse_eval_partition(
