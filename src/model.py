@@ -28,7 +28,7 @@ class SupConLoss(nn.Module):
     All embeddings from the same item_id are positives for each anchor.
     """
 
-    def __init__(self, temperature: float = 0.07):
+    def __init__(self, temperature: float = 0.1):
         super().__init__()
         self.temperature = temperature
 
