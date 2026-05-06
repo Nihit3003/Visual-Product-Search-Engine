@@ -8,9 +8,11 @@ from pathlib import Path
 from PIL import Image
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Sampler
 from torchvision import transforms
 
+import random
+from collections import defaultdict
 
 # ─────────────────────────────────────────────
 #  Parsing helpers
@@ -283,13 +285,32 @@ def build_dataloaders(
             use_gt_bbox=use_gt_bbox,
         )
 
+        if split == "train":
+
+    sampler = ClassBalancedSampler(
+        dataset,
+        classes_per_batch=batch_size // 4,
+        samples_per_class=4,
+    )
+
+    loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=True,
+        )
+    
+    else:
+    
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=(split == "train"),
+            shuffle=False,
             num_workers=num_workers,
             pin_memory=True,
-            drop_last=(split == "train"),
+            drop_last=False,
         )
 
         loaders[split] = loader
@@ -301,3 +322,65 @@ def build_dataloaders(
         )
 
     return loaders
+
+class ClassBalancedSampler(Sampler):
+    """
+    Creates batches like:
+        32 classes × 4 images = 128 batch
+
+    Ensures SupCon always has positives.
+    """
+
+    def __init__(
+        self,
+        dataset,
+        classes_per_batch=32,
+        samples_per_class=4,
+    ):
+        self.dataset = dataset
+        self.classes_per_batch = classes_per_batch
+        self.samples_per_class = samples_per_class
+
+        self.class_to_indices = defaultdict(list)
+
+        for idx, rel_path in enumerate(dataset.image_paths):
+
+            item_id = dataset.img_to_item[rel_path]
+        
+            self.class_to_indices[item_id].append(idx)
+
+        self.classes = list(self.class_to_indices.keys())
+
+        self.batch_size = (
+            classes_per_batch * samples_per_class
+        )
+
+    def __iter__(self):
+
+        random.shuffle(self.classes)
+
+        batch = []
+
+        for cls in self.classes:
+
+            indices = self.class_to_indices[cls]
+
+            if len(indices) >= self.samples_per_class:
+                sampled = random.sample(
+                    indices,
+                    self.samples_per_class
+                )
+            else:
+                sampled = random.choices(
+                    indices,
+                    k=self.samples_per_class
+                )
+
+            batch.extend(sampled)
+
+            if len(batch) == self.batch_size:
+                yield from batch
+                batch = []
+
+    def __len__(self):
+        return len(self.classes) * self.samples_per_class
