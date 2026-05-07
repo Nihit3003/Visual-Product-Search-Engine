@@ -202,7 +202,7 @@ def main():
     
     img_to_bbox = parse_bboxes(str(root / "list_bbox_inshop.txt"))
 
-    query_paths = splits["query"][:5000]
+    query_paths = splits["query"][:2000]
     query_items = [img_to_item[p] for p in query_paths if p in img_to_item]
     query_paths = [p for p in query_paths if p in img_to_item]
     print(f"[Eval] Queries: {len(query_paths):,}")
