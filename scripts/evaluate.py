@@ -35,8 +35,12 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.dataset   import parse_eval_partition, parse_item_ids, parse_bboxes, \
-    DeepFashionDataset, get_clip_transform
+from src.dataset import (
+    parse_eval_partition,
+    parse_bboxes,
+    DeepFashionDataset,
+    get_clip_transform,
+)
 from src.model     import VisualSearchModel
 from src.index     import HNSWIndex
 from src.metrics   import evaluate, evaluate_multi_seed, MetricResults
@@ -98,7 +102,7 @@ def encode_queries(
         batch_paths = image_paths[i : i + batch_size]
         batch_tensors = []
         for rel_path in batch_paths:
-            full = str(Path(img_root) / rel_path)
+            full = str(Path(img_root) / "img" / rel_path)
             try:
                 img = Image.open(full).convert("RGB")
             except Exception:
@@ -109,12 +113,15 @@ def encode_queries(
                 result = localizer.detect(img)
                 img = result["cropped"]
             elif rel_path in img_to_bbox:
-                img = img.crop(img_to_bbox[rel_path])
+                x1, y1, x2, y2 = img_to_bbox[rel_path]
+
+                if x2 > x1 and y2 > y1:
+                    img = img.crop((x1, y1, x2, y2))
 
             batch_tensors.append(transform(img))
 
         tensors = torch.stack(batch_tensors).to(device)
-        embs    = model.encode_image(tensors).cpu().numpy()
+        embs = model.encode_image(tensors).detach().cpu().numpy()
         embs_list.append(embs)
 
     return np.concatenate(embs_list, axis=0)
@@ -159,7 +166,9 @@ def run_condition(
         if reranker is not None and condition in ("B", "C") and candidates:
             q_img_path = query_paths[len(all_retrieved)]
             try:
-                q_img = Image.open(str(Path(img_root) / q_img_path)).convert("RGB")
+                q_img = Image.open(
+                    str(Path(img_root) / "img" / q_img_path)
+                ).convert("RGB")
             except Exception:
                 q_img = Image.new("RGB", (224, 224))
             candidates = reranker.rerank(q_img, candidates)
@@ -189,8 +198,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     root = Path(args.dataset_root)
-    splits      = parse_eval_partition(str(root / "list_eval_partition.txt"))
-    img_to_item = parse_item_ids(str(root / "list_description_inshop.txt"))
+    splits, img_to_item = parse_eval_partition(str(root / "list_eval_partition.txt"))
+    
     img_to_bbox = parse_bboxes(str(root / "list_bbox_inshop.txt"))
 
     query_paths = splits["query"]
