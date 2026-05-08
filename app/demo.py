@@ -256,7 +256,7 @@ def main():
 
         if uploaded is not None:
             query_img = Image.open(uploaded).convert("RGB")
-            st.image(query_img, caption="Original", use_column_width=True)
+            st.image(query_img, caption="Original", width="stretch")
 
             # ── YOLO detection ────────────────
             st.markdown('<div class="section-label" style="margin-top:16px">Detected Crop</div>',
@@ -268,14 +268,14 @@ def main():
                 box       = detection["box"]
 
                 if box:
-                    st.image(cropped, caption=f"YOLO crop (conf={conf:.2f})", use_column_width=True)
+                    st.image(cropped, caption=f"YOLO crop (conf={conf:.2f})", width="stretch")
                     st.success(f"Box: {box}")
                 else:
-                    st.image(cropped, caption="No detection — using full image", use_column_width=True)
+                    st.image(cropped, caption="No detection — using full image", width="stretch")
                     st.warning("No confident detection. Using full image.")
             else:
                 cropped = query_img
-                st.image(cropped, caption="GT crop / full image", use_column_width=True)
+                st.image(cropped, caption="GT crop / full image", width="stretch")
 
             # ── Crop confirmation ─────────────
             st.markdown('<div class="section-label" style="margin-top:16px">Confirm</div>',
@@ -323,11 +323,11 @@ def main():
                         img_path = dataset_root / "img" / cand["img_path"]
                         try:
                             img = Image.open(str(img_path)).convert("RGB")
-                            st.image(img, use_column_width=True)
+                            st.image(img, width="stretch")
                         except Exception:
                             st.image(
                                 Image.new("RGB", (150, 200), color=(230, 230, 230)),
-                                use_column_width=True,
+                                width="stretch",
                             )
                         score_str = f"{cand['score']:.3f}"
                         itm_str   = f"ITM {cand.get('itm_score', 0):.2f}" \
