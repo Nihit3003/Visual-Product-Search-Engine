@@ -1,13 +1,7 @@
 """
 Improved HNSW ANN retrieval index.
 
-Enhancements:
-- category-aware metadata
-- duplicate suppression
-- reranking support
-- robust metadata handling
-- normalized embeddings
-- better retrieval stability
+HNSWLIB version for Kaggle compatibility.
 """
 
 from __future__ import annotations
@@ -16,7 +10,7 @@ import json
 from pathlib import Path
 
 import numpy as np
-import faiss
+import hnswlib
 
 
 # =========================================================
@@ -35,18 +29,20 @@ class HNSWIndex:
 
         self.dim = dim
 
-        self._index = faiss.IndexHNSWFlat(
-            dim,
-            M,
-            faiss.METRIC_INNER_PRODUCT
-        )
+        self.M = M
 
-        self._index.hnsw.efConstruction = ef_construction
-        self._index.hnsw.efSearch = ef_search
+        self.ef_construction = ef_construction
+
+        self.ef_search = ef_search
+
+        self._index = None
 
         self.item_ids = []
+
         self.captions = []
+
         self.img_paths = []
+
         self.metadata = []
 
     # =====================================================
@@ -68,7 +64,6 @@ class HNSWIndex:
         vecs = embeddings.astype(np.float32)
 
         # normalize
-
         norms = np.linalg.norm(
             vecs,
             axis=1,
@@ -81,14 +76,39 @@ class HNSWIndex:
             None
         )
 
-        self._index.add(vecs)
+        n = len(vecs)
+
+        # create index lazily
+        if self._index is None:
+
+            self._index = hnswlib.Index(
+                space="cosine",
+                dim=self.dim
+            )
+
+            self._index.init_index(
+                max_elements=n,
+                ef_construction=self.ef_construction,
+                M=self.M
+            )
+
+            self._index.set_ef(self.ef_search)
+
+        current_count = len(self.item_ids)
+
+        labels = np.arange(
+            current_count,
+            current_count + n
+        )
+
+        self._index.add_items(
+            vecs,
+            labels
+        )
 
         captions = captions or [""] * len(item_ids)
-        metadata = metadata or [{} for _ in item_ids]
 
-        # ---------------------------------------------
-        # enrich metadata
-        # ---------------------------------------------
+        metadata = metadata or [{} for _ in item_ids]
 
         enriched_meta = []
 
@@ -136,8 +156,11 @@ class HNSWIndex:
             enriched_meta.append(new_meta)
 
         self.item_ids.extend(item_ids)
+
         self.img_paths.extend(img_paths)
+
         self.captions.extend(captions)
+
         self.metadata.extend(enriched_meta)
 
     # =====================================================
@@ -146,7 +169,7 @@ class HNSWIndex:
 
     def __len__(self):
 
-        return self._index.ntotal
+        return len(self.item_ids)
 
     # =====================================================
     # SEARCH
@@ -168,30 +191,27 @@ class HNSWIndex:
 
         q /= np.linalg.norm(q) + 1e-8
 
-        scores, indices = self._index.search(
+        indices, distances = self._index.knn_query(
             q,
-            max(top_k * 3, 50)
+            k=max(top_k * 3, 50)
         )
 
-        scores = scores[0].tolist()
         indices = indices[0].tolist()
+
+        distances = distances[0].tolist()
 
         results = []
 
         seen_items = set()
 
-        for rank, (score, idx) in enumerate(
-            zip(scores, indices)
+        for rank, (idx, dist) in enumerate(
+            zip(indices, distances)
         ):
 
             if idx < 0:
                 continue
 
             item_id = self.item_ids[idx]
-
-            # -----------------------------------------
-            # duplicate suppression
-            # -----------------------------------------
 
             if deduplicate_items:
 
@@ -202,11 +222,9 @@ class HNSWIndex:
 
             meta = self.metadata[idx]
 
-            # -----------------------------------------
-            # reranking bonuses
-            # -----------------------------------------
+            similarity = 1.0 - float(dist)
 
-            rerank_score = float(score)
+            rerank_score = similarity
 
             if query_category is not None:
 
@@ -217,10 +235,6 @@ class HNSWIndex:
 
                 if meta.get("gender") == query_gender:
                     rerank_score += 0.04
-
-            # -----------------------------------------
-            # texture/style heuristic
-            # -----------------------------------------
 
             caption = self.captions[idx]
 
@@ -238,17 +252,13 @@ class HNSWIndex:
 
             results.append({
                 "rank": rank + 1,
-                "score": float(score),
-                "rerank_score": float(rerank_score),
+                "score": similarity,
+                "rerank_score": rerank_score,
                 "item_id": item_id,
                 "img_path": self.img_paths[idx],
                 "caption": caption,
                 "metadata": meta,
             })
-
-        # ---------------------------------------------
-        # final reranking
-        # ---------------------------------------------
 
         results = sorted(
             results,
@@ -294,9 +304,8 @@ class HNSWIndex:
             exist_ok=True
         )
 
-        faiss.write_index(
-            self._index,
-            str(save_dir / "hnsw.index")
+        self._index.save_index(
+            str(save_dir / "hnsw.bin")
         )
 
         meta = {
@@ -330,25 +339,36 @@ class HNSWIndex:
 
         save_dir = Path(save_dir)
 
-        index_path = save_dir / "hnsw.index"
         meta_path = save_dir / "metadata.json"
-
-        faiss_idx = faiss.read_index(
-            str(index_path)
-        )
 
         with open(meta_path) as f:
 
             meta = json.load(f)
 
-        obj = cls.__new__(cls)
+        obj = cls(
+            dim=meta["dim"]
+        )
 
-        obj.dim = meta["dim"]
-        obj._index = faiss_idx
         obj.item_ids = meta["item_ids"]
+
         obj.captions = meta["captions"]
+
         obj.img_paths = meta["img_paths"]
+
         obj.metadata = meta["metadata"]
+
+        obj._index = hnswlib.Index(
+            space="cosine",
+            dim=obj.dim
+        )
+
+        obj._index.load_index(
+            str(save_dir / "hnsw.bin")
+        )
+
+        obj._index.set_ef(
+            obj.ef_search
+        )
 
         print(
             f"[Index] Loaded {len(obj)} vectors from {save_dir}"
