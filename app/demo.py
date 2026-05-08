@@ -320,7 +320,7 @@ def main():
                 cols = st.columns(n_cols)
                 for col, cand in zip(cols, row):
                     with col:
-                        img_path = dataset_root / cand["img_path"]
+                        img_path = dataset_root / "img" / cand["img_path"]
                         try:
                             img = Image.open(str(img_path)).convert("RGB")
                             st.image(img, use_column_width=True)
