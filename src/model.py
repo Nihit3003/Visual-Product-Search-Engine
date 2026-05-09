@@ -154,13 +154,13 @@ class SupConLoss(nn.Module):
 
 class VisualSearchModel(nn.Module):
 
-    CLIP_MODEL = "ViT-B-32"
+    CLIP_MODEL = "ViT-L-14"
 
     CLIP_PRETRAIN = "openai"
 
     def __init__(
         self,
-        clip_model_name="ViT-B-32",
+        clip_model_name="ViT-L-14",
         pretrained="openai",
         alpha=0.7,
         unfreeze_last_n=4,
