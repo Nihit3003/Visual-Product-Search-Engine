@@ -87,7 +87,7 @@ class HNSWIndex:
             )
 
             self._index.init_index(
-                max_elements=n,
+                max_elements=50000,
                 ef_construction=self.ef_construction,
                 M=self.M
             )
@@ -229,7 +229,7 @@ class HNSWIndex:
             if query_category is not None:
 
                 if meta.get("category") == query_category:
-                    rerank_score += 0.08
+                    rerank_score += 0.15
 
             if query_gender is not None:
 
