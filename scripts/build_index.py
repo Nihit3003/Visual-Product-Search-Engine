@@ -180,6 +180,7 @@ def build_multi_crop_embeddings(
     full_batch = []
     center_batch = []
     upper_batch = []
+    flip_batch = []
 
     # -----------------------------------------------------
     # create crops
@@ -189,8 +190,10 @@ def build_multi_crop_embeddings(
 
         w, h = img.size
 
+        # full image
         full = img
 
+        # center crop
         center = img.crop((
             int(0.15 * w),
             int(0.15 * h),
@@ -198,6 +201,7 @@ def build_multi_crop_embeddings(
             int(0.85 * h)
         ))
 
+        # upper-body crop
         upper = img.crop((
             0,
             0,
@@ -205,21 +209,84 @@ def build_multi_crop_embeddings(
             int(0.7 * h)
         ))
 
-        full_batch.append(transform(full))
-        center_batch.append(transform(center))
-        upper_batch.append(transform(upper))
+        # horizontal flip
+        flip = full.transpose(
+            Image.FLIP_LEFT_RIGHT
+        )
 
-    full_batch = torch.stack(full_batch).to(device)
-    center_batch = torch.stack(center_batch).to(device)
-    upper_batch = torch.stack(upper_batch).to(device)
+        # transforms
+        full_batch.append(
+            transform(full)
+        )
+
+        center_batch.append(
+            transform(center)
+        )
+
+        upper_batch.append(
+            transform(upper)
+        )
+
+        flip_batch.append(
+            transform(flip)
+        )
+
+    # -----------------------------------------------------
+    # stack
+    # -----------------------------------------------------
+
+    full_batch = torch.stack(
+        full_batch
+    ).to(device)
+
+    center_batch = torch.stack(
+        center_batch
+    ).to(device)
+
+    upper_batch = torch.stack(
+        upper_batch
+    ).to(device)
+
+    flip_batch = torch.stack(
+        flip_batch
+    ).to(device)
+
+    # -----------------------------------------------------
+    # embeddings
+    # -----------------------------------------------------
 
     with torch.no_grad():
 
-        e1 = model.encode_image(full_batch)
-        e2 = model.encode_image(center_batch)
-        e3 = model.encode_image(upper_batch)
+        e1 = model.encode_image(
+            full_batch
+        )
 
-    emb = (e1 + e2 + e3) / 3.0
+        e2 = model.encode_image(
+            center_batch
+        )
+
+        e3 = model.encode_image(
+            upper_batch
+        )
+
+        e4 = model.encode_image(
+            flip_batch
+        )
+
+    # -----------------------------------------------------
+    # weighted fusion
+    # -----------------------------------------------------
+
+    emb = (
+        0.45 * e1 +
+        0.25 * e2 +
+        0.15 * e3 +
+        0.15 * e4
+    )
+
+    # -----------------------------------------------------
+    # normalize
+    # -----------------------------------------------------
 
     emb = torch.nn.functional.normalize(
         emb,
@@ -323,7 +390,7 @@ def main():
     # -----------------------------------------------------
 
     transform = get_clip_transform(
-        image_size=224,
+        image_size=336,
         augment=False
     )
 
@@ -480,6 +547,13 @@ def main():
         meta = {
             "category": category,
             "yolo_confidence": float(conf),
+            "localization_quality": (
+                "high"
+                if conf > 0.75
+                else "medium"
+                if conf > 0.4
+                else "low"
+            ),
         }
 
         batch_imgs.append(crop)
