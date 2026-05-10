@@ -50,6 +50,11 @@ def get_args():
     )
 
     p.add_argument(
+        "--captions_json",
+        default=None
+    )
+
+    p.add_argument(
         "--ckpt_path",
         default=None
     )
@@ -80,7 +85,7 @@ def get_args():
     p.add_argument(
         "--embed_dim",
         type=int,
-        default=256
+        default=768
     )
 
     p.add_argument(
@@ -278,6 +283,27 @@ def main():
     root = Path(args.dataset_root)
 
     # -----------------------------------------------------
+    # captions
+    # -----------------------------------------------------
+
+    captions_map = {}
+
+    if (
+        args.captions_json is not None
+        and
+        Path(args.captions_json).exists()
+    ):
+
+        with open(args.captions_json) as f:
+
+            captions_map = json.load(f)
+
+        print(
+            f"[Indexing] Loaded "
+            f"{len(captions_map):,} captions"
+        )
+
+    # -----------------------------------------------------
     # parse dataset
     # -----------------------------------------------------
 
@@ -408,20 +434,54 @@ def main():
             device,
         )
 
-        captions = [""] * len(batch_imgs)
+        captions = []
 
         # -------------------------------------------------
         # captions
         # -------------------------------------------------
 
-        if captioner is not None:
+        for rel_path in batch_paths:
+
+            if rel_path in captions_map:
+
+                cap = captions_map[rel_path]
+
+                if isinstance(cap, dict):
+
+                    cap = cap.get(
+                        "caption",
+                        ""
+                    )
+
+                captions.append(cap)
+
+            else:
+
+                captions.append("")
+
+        # -------------------------------------------------
+        # fallback BLIP generation
+        # -------------------------------------------------
+
+        if (
+            captioner is not None
+            and
+            sum(len(c) > 0 for c in captions)
+            < len(captions)
+        ):
 
             try:
 
-                captions = captioner.caption(
+                generated = captioner.caption(
                     batch_imgs,
                     batch_size=4
                 )
+
+                for i in range(len(captions)):
+
+                    if captions[i] == "":
+
+                        captions[i] = generated[i]
 
             except Exception as e:
 
@@ -437,7 +497,7 @@ def main():
         if (
             args.condition in ("B", "C")
             and
-            captioner is not None
+            len(captions) > 0
         ):
 
             try:
