@@ -1,7 +1,12 @@
 """
-DeepFashion Retrieval Evaluation
-Matches the benchmark-style evaluation flow
-used in the hard-negative mining notebook.
+Final DeepFashion Retrieval Evaluation
+
+Consistent with:
+- ViT-L-14
+- 768-d embeddings
+- GT bbox crops
+- multi-crop indexing
+- upgraded HNSW retrieval
 """
 
 import argparse
@@ -12,10 +17,12 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+
 from PIL import Image
 from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parent.parent
+
 sys.path.insert(0, str(ROOT))
 
 from src.dataset import (
@@ -72,7 +79,7 @@ def get_args():
     p.add_argument(
         "--batch_size",
         type=int,
-        default=64,
+        default=48,
     )
 
     p.add_argument(
@@ -97,14 +104,14 @@ def get_args():
         "--seeds",
         nargs="+",
         type=int,
-        default=[42, 83, 527, 588],
+        default=[2, 536, 576, 584],
     )
 
     return p.parse_args()
 
 
 # =========================================================
-# QUERY ENCODING
+# MULTI-CROP QUERY EMBEDDINGS
 # =========================================================
 
 @torch.no_grad()
@@ -114,7 +121,7 @@ def encode_queries(
     img_root,
     bbox_map,
     device,
-    batch_size=64,
+    batch_size=48,
 ):
 
     model.eval()
@@ -135,11 +142,13 @@ def encode_queries(
             i:i + batch_size
         ]
 
-        batch_imgs = []
+        full_batch = []
+        center_batch = []
+        upper_batch = []
 
         for rel_path in batch_paths:
 
-            full = (
+            full_path = (
                 Path(img_root)
                 / "img"
                 / rel_path
@@ -148,7 +157,7 @@ def encode_queries(
             try:
 
                 img = Image.open(
-                    full
+                    full_path
                 ).convert("RGB")
 
             except Exception:
@@ -158,9 +167,9 @@ def encode_queries(
                     (224, 224)
                 )
 
-            # ---------------------------------------------
-            # GT bbox crop ONLY
-            # ---------------------------------------------
+            # -------------------------------------------------
+            # GT bbox
+            # -------------------------------------------------
 
             bbox = bbox_map.get(rel_path)
 
@@ -171,16 +180,70 @@ def encode_queries(
                     bbox
                 )
 
-            batch_imgs.append(
-                transform(img)
+            # -------------------------------------------------
+            # multi-crop
+            # -------------------------------------------------
+
+            w, h = img.size
+
+            full = img
+
+            center = img.crop((
+                int(0.15 * w),
+                int(0.15 * h),
+                int(0.85 * w),
+                int(0.85 * h)
+            ))
+
+            upper = img.crop((
+                0,
+                0,
+                w,
+                int(0.7 * h)
+            ))
+
+            full_batch.append(
+                transform(full)
             )
 
-        tensors = torch.stack(
-            batch_imgs
+            center_batch.append(
+                transform(center)
+            )
+
+            upper_batch.append(
+                transform(upper)
+            )
+
+        full_batch = torch.stack(
+            full_batch
         ).to(device)
 
-        emb = model.encode_image(
-            tensors
+        center_batch = torch.stack(
+            center_batch
+        ).to(device)
+
+        upper_batch = torch.stack(
+            upper_batch
+        ).to(device)
+
+        e1 = model.encode_image(
+            full_batch
+        )
+
+        e2 = model.encode_image(
+            center_batch
+        )
+
+        e3 = model.encode_image(
+            upper_batch
+        )
+
+        emb = (
+            0.5 * e1
+            +
+            0.3 * e2
+            +
+            0.2 * e3
         )
 
         emb = F.normalize(
@@ -209,6 +272,7 @@ def run_condition(
     index_dir,
     query_paths,
     query_items,
+    gallery_items,
     img_root,
     bbox_map,
     device,
@@ -266,7 +330,7 @@ def run_condition(
     results = evaluate(
         query_ids=query_items,
         retrieved=retrieved,
-        gallery_ids=[],
+        gallery_ids=gallery_items,
         item_to_imgs={},
         K_values=[5, 10, 15],
     )
@@ -288,6 +352,12 @@ def main():
         "cuda"
         if torch.cuda.is_available()
         else "cpu"
+    )
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+
+    torch.set_float32_matmul_precision(
+        "high"
     )
 
     out_dir = Path(
@@ -331,6 +401,15 @@ def main():
 
     ]
 
+    gallery_items = [
+
+        img_to_item[p]
+
+        for p in splits["gallery"]
+
+        if p in img_to_item
+    ]
+
     print(
         f"[Eval] Queries: "
         f"{len(query_paths):,}"
@@ -365,7 +444,7 @@ def main():
         pretrained="openai",
         alpha=args.alpha_C,
         embed_dim=args.embed_dim,
-        unfreeze_last_n=4,
+        unfreeze_last_n=6,
     ).to(device)
 
     if args.ckpt_path:
@@ -463,6 +542,8 @@ def main():
 
                 query_items=query_items,
 
+                gallery_items=gallery_items,
+
                 img_root=str(root),
 
                 bbox_map=bbox_map,
@@ -541,4 +622,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
