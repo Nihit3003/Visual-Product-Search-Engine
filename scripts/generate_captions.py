@@ -88,8 +88,12 @@ class CaptionGenerator:
             Blip2ForConditionalGeneration
             .from_pretrained(
                 model_id,
-                torch_dtype=torch.float16,
-                device_map="auto",
+                torch_dtype=(
+                    torch.float16
+                    if self.device == "cuda"
+                    else torch.float32
+                ),
+                device_map="auto" if self.device == "cuda" else None,
             )
         )
 
