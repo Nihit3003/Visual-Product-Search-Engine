@@ -387,32 +387,11 @@ def main():
         # captions
         # -------------------------------------------------
 
-        captioner = None
-
-        print("[Indexing] Captioner disabled")
-
-            try:
-
-                captions = captioner.caption(
-                    batch_imgs
-                )
-
-                txt_embs = model.encode_text(
-                    captions
-                )
-
-                embs = model.fuse(
-                    embs,
-                    txt_embs
-                )
-
-            except Exception:
-
-                captions = [""] * len(batch_imgs)
-
-        else:
-
-            captions = [""] * len(batch_imgs)
+        # -------------------------------------------------
+        # captions disabled
+        # -------------------------------------------------
+        
+        captions = [""] * len(batch_imgs)
 
         # -------------------------------------------------
         # add to index
