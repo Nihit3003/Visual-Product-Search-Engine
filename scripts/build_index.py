@@ -371,47 +371,104 @@ def main():
 
         if not batch_imgs:
             return
-
+    
         # -------------------------------------------------
-        # embeddings
+        # image embeddings
         # -------------------------------------------------
-
+    
         embs = build_multi_crop_embeddings(
             batch_imgs,
             model,
             transform,
             device,
         )
-
+    
         # -------------------------------------------------
         # BLIP captions
         # -------------------------------------------------
-        
+    
         if captioner is not None:
-        
+    
             try:
-        
+    
                 captions = captioner.caption(
                     batch_imgs,
                     batch_size=4
                 )
-        
+    
             except Exception as e:
-        
+    
                 print(
                     f"[Indexing] Caption generation failed: {e}"
                 )
-        
+    
                 captions = [""] * len(batch_imgs)
-        
+    
         else:
-        
+    
             captions = [""] * len(batch_imgs)
-
+    
+        # -------------------------------------------------
+        # multimodal fusion
+        # -------------------------------------------------
+    
+        if (
+            args.condition in ("B", "C")
+            and
+            captioner is not None
+        ):
+    
+            try:
+    
+                import open_clip
+    
+                tokenizer = open_clip.get_tokenizer(
+                    "ViT-B-16"
+                )
+    
+                text_tokens = tokenizer(
+                    captions
+                ).to(device)
+    
+                with torch.no_grad():
+    
+                    text_embs = model.encode_text(
+                        text_tokens
+                    )
+    
+                text_embs = (
+                    torch.nn.functional.normalize(
+                        text_embs,
+                        dim=-1
+                    )
+                )
+    
+                # -----------------------------------------
+                # image-text fusion
+                # -----------------------------------------
+    
+                embs = (
+                    args.alpha * embs +
+                    (1.0 - args.alpha) * text_embs
+                )
+    
+                embs = (
+                    torch.nn.functional.normalize(
+                        embs,
+                        dim=-1
+                    )
+                )
+    
+            except Exception as e:
+    
+                print(
+                    f"[Indexing] Text fusion failed: {e}"
+                )
+    
         # -------------------------------------------------
         # add to index
         # -------------------------------------------------
-
+    
         index.add(
             embeddings=embs.detach().cpu().numpy(),
             item_ids=batch_items[:],
@@ -419,7 +476,7 @@ def main():
             captions=captions,
             metadata=batch_metadata[:],
         )
-
+    
         batch_imgs.clear()
         batch_items.clear()
         batch_paths.clear()
