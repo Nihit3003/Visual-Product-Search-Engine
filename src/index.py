@@ -1,5 +1,13 @@
 """
-Improved HNSW ANN retrieval index.
+High-quality HNSW retrieval index.
+
+Upgrades:
+- stronger ANN quality
+- ViT-L-14 / 768-d support
+- better reranking
+- safer normalization
+- improved metadata filtering
+- stronger retrieval consistency
 """
 
 from __future__ import annotations
@@ -19,10 +27,10 @@ class HNSWIndex:
 
     def __init__(
         self,
-        dim: int = 256,
-        M: int = 32,
-        ef_construction: int = 200,
-        ef_search: int = 256,
+        dim: int = 768,
+        M: int = 64,
+        ef_construction: int = 400,
+        ef_search: int = 320,
     ):
 
         self.dim = dim
@@ -42,6 +50,25 @@ class HNSWIndex:
         self.img_paths = []
 
         self.metadata = []
+
+    # =====================================================
+    # NORMALIZE
+    # =====================================================
+
+    @staticmethod
+    def _normalize(vecs):
+
+        norms = np.linalg.norm(
+            vecs,
+            axis=1,
+            keepdims=True
+        )
+
+        return vecs / np.clip(
+            norms,
+            1e-8,
+            None
+        )
 
     # =====================================================
     # ADD
@@ -64,20 +91,8 @@ class HNSWIndex:
             np.float32
         )
 
-        # -------------------------------------------------
-        # normalize
-        # -------------------------------------------------
-
-        norms = np.linalg.norm(
-            vecs,
-            axis=1,
-            keepdims=True
-        )
-
-        vecs = vecs / np.clip(
-            norms,
-            1e-8,
-            None
+        vecs = self._normalize(
+            vecs
         )
 
         n = len(vecs)
@@ -94,7 +109,7 @@ class HNSWIndex:
             )
 
             self._index.init_index(
-                max_elements=50000,
+                max_elements=100000,
                 ef_construction=self.ef_construction,
                 M=self.M
             )
@@ -154,6 +169,8 @@ class HNSWIndex:
                 "tank",
                 "hoodie",
                 "jacket",
+                "coat",
+                "sweater",
             ]):
                 category = "top"
 
@@ -163,6 +180,7 @@ class HNSWIndex:
                 "skirt",
                 "legging",
                 "jean",
+                "trouser",
             ]):
                 category = "bottom"
 
@@ -235,14 +253,11 @@ class HNSWIndex:
             dtype=np.float32
         ).reshape(1, -1)
 
-        q /= (
-            np.linalg.norm(q)
-            + 1e-8
-        )
+        q = self._normalize(q)
 
         indices, distances = self._index.knn_query(
             q,
-            k=max(top_k * 4, 80)
+            k=max(top_k * 6, 120)
         )
 
         indices = indices[0].tolist()
@@ -280,7 +295,7 @@ class HNSWIndex:
             meta = self.metadata[idx]
 
             # ---------------------------------------------
-            # region-aware filtering
+            # region filtering
             # ---------------------------------------------
 
             if query_region == "upper":
@@ -288,7 +303,6 @@ class HNSWIndex:
                 if meta.get("category") not in [
                     "top",
                     "shirt",
-                    "upper",
                     "hoodie",
                     "jacket",
                     "blouse",
@@ -322,7 +336,7 @@ class HNSWIndex:
                 == query_category
             ):
 
-                rerank_score += 0.15
+                rerank_score += 0.18
 
             if (
                 query_gender is not None
@@ -331,7 +345,7 @@ class HNSWIndex:
                 == query_gender
             ):
 
-                rerank_score += 0.04
+                rerank_score += 0.05
 
             # ---------------------------------------------
             # caption reranking
@@ -341,19 +355,29 @@ class HNSWIndex:
 
             if caption:
 
-                caption_lower = caption.lower()
+                cap = caption.lower()
 
-                if any(k in caption_lower for k in [
+                style_terms = [
 
                     "oversized",
                     "casual",
                     "streetwear",
-                    "loose",
                     "minimalist",
                     "athletic",
-                ]):
+                    "formal",
+                    "relaxed fit",
+                    "vintage",
+                    "slim fit",
+                ]
 
-                    rerank_score += 0.02
+                style_hits = sum(
+                    t in cap
+                    for t in style_terms
+                )
+
+                rerank_score += (
+                    0.01 * style_hits
+                )
 
             results.append({
 
