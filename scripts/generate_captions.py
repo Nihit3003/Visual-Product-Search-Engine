@@ -1,5 +1,5 @@
 """
-Offline BLIP caption generation
+Final offline BLIP caption generation
 for multimodal retrieval fusion.
 """
 
@@ -9,7 +9,9 @@ import sys
 from pathlib import Path
 
 import torch
+
 from PIL import Image
+
 from tqdm import tqdm
 
 from transformers import (
@@ -18,6 +20,7 @@ from transformers import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.dataset import (
@@ -56,6 +59,12 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=2,
+    )
+
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -69,6 +78,12 @@ def parse_args():
 # =========================================================
 
 class CaptionGenerator:
+
+    PROMPT = (
+        "Describe the clothing item including "
+        "color, material, fit, texture, "
+        "style, pattern, and garment type."
+    )
 
     def __init__(
         self,
@@ -95,74 +110,77 @@ class CaptionGenerator:
             )
         )
 
+        dtype = (
+            torch.float16
+            if self.device == "cuda"
+            else torch.float32
+        )
+
         self.model = (
             Blip2ForConditionalGeneration
             .from_pretrained(
                 model_id,
-                torch_dtype=(
-                    torch.float16
-                    if self.device == "cuda"
-                    else torch.float32
-                ),
-                device_map=(
-                    "auto"
-                    if self.device == "cuda"
-                    else None
-                ),
+                torch_dtype=dtype,
             )
-        )
+        ).to(self.device)
 
         self.model.eval()
 
-        print("[BLIP-2] Ready")
+        for p in self.model.parameters():
 
-    # =====================================================
-    # GENERATE
-    # =====================================================
+            p.requires_grad_(False)
 
-    def generate(
-        self,
-        image,
-    ):
-
-        prompt = (
-            "Describe the clothing item "
-            "including color, clothing type, "
-            "fit, fabric, and style."
+        print(
+            "[BLIP-2] Ready"
         )
 
+    # =====================================================
+    # GENERATE BATCH
+    # =====================================================
+
+    @torch.no_grad()
+    def generate_batch(
+        self,
+        images,
+    ):
+
         inputs = self.processor(
-            images=image,
-            text=prompt,
-            return_tensors="pt"
+            images=images,
+            text=[
+                self.PROMPT
+            ] * len(images),
+            return_tensors="pt",
+            padding=True,
         )
 
         inputs = {
 
-            k: v.to(
-                self.device
-            )
+            k: v.to(self.device)
 
             for k, v in inputs.items()
         }
 
-        with torch.no_grad():
+        generated_ids = self.model.generate(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            num_beams=3,
+        )
 
-            generated_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=self.max_new_tokens,
-                num_beams=3,
-            )
-
-        caption = (
+        captions = (
             self.processor.batch_decode(
                 generated_ids,
                 skip_special_tokens=True
-            )[0]
-            .strip()
+            )
         )
 
-        return caption
+        captions = [
+
+            c.strip()
+
+            for c in captions
+        ]
+
+        return captions
 
 
 # =========================================================
@@ -172,6 +190,12 @@ class CaptionGenerator:
 def main():
 
     args = parse_args()
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+
+    torch.set_float32_matmul_precision(
+        "high"
+    )
 
     dataset_root = Path(
         args.dataset_root
@@ -206,6 +230,53 @@ def main():
 
     results = {}
 
+    batch_imgs = []
+
+    batch_paths = []
+
+    # =====================================================
+    # FLUSH
+    # =====================================================
+
+    def flush():
+
+        if not batch_imgs:
+            return
+
+        try:
+
+            captions = (
+                captioner.generate_batch(
+                    batch_imgs
+                )
+            )
+
+            for rel_path, cap in zip(
+                batch_paths,
+                captions
+            ):
+
+                results[rel_path] = cap
+
+        except Exception as e:
+
+            print(
+                f"[BLIP-2] "
+                f"Batch failed: {e}"
+            )
+
+            for rel_path in batch_paths:
+
+                results[rel_path] = ""
+
+        batch_imgs.clear()
+
+        batch_paths.clear()
+
+    # =====================================================
+    # LOOP
+    # =====================================================
+
     for path in tqdm(
         all_images,
         desc="Generating captions"
@@ -221,9 +292,9 @@ def main():
                 path.relative_to(img_root)
             )
 
-            # ---------------------------------------------
+            # -------------------------------------------------
             # GT bbox crop
-            # ---------------------------------------------
+            # -------------------------------------------------
 
             bbox = bbox_map.get(
                 rel_path
@@ -236,11 +307,25 @@ def main():
                     bbox
                 )
 
-            caption = captioner.generate(
+            batch_imgs.append(
                 image
             )
 
-            results[rel_path] = caption
+            batch_paths.append(
+                rel_path
+            )
+
+            # -------------------------------------------------
+            # flush
+            # -------------------------------------------------
+
+            if (
+                len(batch_imgs)
+                >=
+                args.batch_size
+            ):
+
+                flush()
 
         except Exception as e:
 
@@ -249,7 +334,11 @@ def main():
                 f"{path.name}: {e}"
             )
 
-            continue
+    flush()
+
+    # =====================================================
+    # SAVE
+    # =====================================================
 
     output_path = Path(
         args.output_json
@@ -278,4 +367,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
