@@ -299,7 +299,7 @@ def train():
         dataset_root=args.dataset_root,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        image_size=336,
+        image_size=224,
         use_gt_bbox=True,
     )
 
