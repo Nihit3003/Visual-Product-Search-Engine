@@ -66,7 +66,7 @@ def get_args():
     p.add_argument("--embed_dim",    type=int, default=256)
     p.add_argument("--top_k",        type=int, default=15,
                    help="Retrieve top-K from ANN, then re-rank")
-    p.add_argument("--use_itm",      action="store_true", default=True)
+    p.add_argument("--use_itm", action="store_true")
     p.add_argument("--yolo_weights", default="yolov8n.pt")
     p.add_argument("--alpha_B",      type=float, default=0.6,
                    help="Alpha for condition B")
@@ -202,7 +202,7 @@ def main():
     
     img_to_bbox = parse_bboxes(str(root / "list_bbox_inshop.txt"))
 
-    query_paths = splits["query"][:2000]
+    query_paths = splits["query"][:1000]
     query_items = [img_to_item[p] for p in query_paths if p in img_to_item]
     query_paths = [p for p in query_paths if p in img_to_item]
     print(f"[Eval] Queries: {len(query_paths):,}")
