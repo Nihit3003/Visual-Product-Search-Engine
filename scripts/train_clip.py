@@ -97,7 +97,7 @@ def get_args():
     p.add_argument(
         "--unfreeze_last_n",
         type=int,
-        default=6
+        default=4
     )
 
     p.add_argument(
