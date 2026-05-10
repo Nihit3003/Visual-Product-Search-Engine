@@ -1,7 +1,5 @@
 """
 Improved HNSW ANN retrieval index.
-
-HNSWLIB version for Kaggle compatibility.
 """
 
 from __future__ import annotations
@@ -9,8 +7,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import hnswlib
+import numpy as np
 
 
 # =========================================================
@@ -59,11 +57,17 @@ class HNSWIndex:
     ):
 
         assert embeddings.ndim == 2
+
         assert embeddings.shape[1] == self.dim
 
-        vecs = embeddings.astype(np.float32)
+        vecs = embeddings.astype(
+            np.float32
+        )
 
+        # -------------------------------------------------
         # normalize
+        # -------------------------------------------------
+
         norms = np.linalg.norm(
             vecs,
             axis=1,
@@ -78,7 +82,10 @@ class HNSWIndex:
 
         n = len(vecs)
 
-        # create index lazily
+        # -------------------------------------------------
+        # lazy init
+        # -------------------------------------------------
+
         if self._index is None:
 
             self._index = hnswlib.Index(
@@ -92,9 +99,13 @@ class HNSWIndex:
                 M=self.M
             )
 
-            self._index.set_ef(self.ef_search)
+            self._index.set_ef(
+                self.ef_search
+            )
 
-        current_count = len(self.item_ids)
+        current_count = len(
+            self.item_ids
+        )
 
         labels = np.arange(
             current_count,
@@ -106,15 +117,32 @@ class HNSWIndex:
             labels
         )
 
-        captions = captions or [""] * len(item_ids)
+        captions = (
+            captions
+            or
+            [""] * len(item_ids)
+        )
 
-        metadata = metadata or [{} for _ in item_ids]
+        metadata = (
+            metadata
+            or
+            [{} for _ in item_ids]
+        )
 
         enriched_meta = []
 
-        for path, meta in zip(img_paths, metadata):
+        # -------------------------------------------------
+        # enrich metadata
+        # -------------------------------------------------
 
-            path_lower = str(path).lower()
+        for path, meta in zip(
+            img_paths,
+            metadata
+        ):
+
+            path_lower = str(
+                path
+            ).lower()
 
             category = "unknown"
 
@@ -123,7 +151,9 @@ class HNSWIndex:
                 "shirt",
                 "top",
                 "blouse",
-                "tank"
+                "tank",
+                "hoodie",
+                "jacket",
             ]):
                 category = "top"
 
@@ -132,7 +162,7 @@ class HNSWIndex:
                 "short",
                 "skirt",
                 "legging",
-                "jean"
+                "jean",
             ]):
                 category = "bottom"
 
@@ -148,20 +178,35 @@ class HNSWIndex:
                 gender = "men"
 
             new_meta = {
+
                 **meta,
-                "category": category,
-                "gender": gender,
+
+                "category":
+                    category,
+
+                "gender":
+                    gender,
             }
 
-            enriched_meta.append(new_meta)
+            enriched_meta.append(
+                new_meta
+            )
 
-        self.item_ids.extend(item_ids)
+        self.item_ids.extend(
+            item_ids
+        )
 
-        self.img_paths.extend(img_paths)
+        self.img_paths.extend(
+            img_paths
+        )
 
-        self.captions.extend(captions)
+        self.captions.extend(
+            captions
+        )
 
-        self.metadata.extend(enriched_meta)
+        self.metadata.extend(
+            enriched_meta
+        )
 
     # =====================================================
     # LEN
@@ -190,11 +235,14 @@ class HNSWIndex:
             dtype=np.float32
         ).reshape(1, -1)
 
-        q /= np.linalg.norm(q) + 1e-8
+        q /= (
+            np.linalg.norm(q)
+            + 1e-8
+        )
 
         indices, distances = self._index.knn_query(
             q,
-            k=max(top_k * 3, 50)
+            k=max(top_k * 4, 80)
         )
 
         indices = indices[0].tolist()
@@ -205,6 +253,10 @@ class HNSWIndex:
 
         seen_items = set()
 
+        # -------------------------------------------------
+        # candidate loop
+        # -------------------------------------------------
+
         for rank, (idx, dist) in enumerate(
             zip(indices, distances)
         ):
@@ -213,6 +265,10 @@ class HNSWIndex:
                 continue
 
             item_id = self.item_ids[idx]
+
+            # ---------------------------------------------
+            # deduplicate
+            # ---------------------------------------------
 
             if deduplicate_items:
 
@@ -223,12 +279,12 @@ class HNSWIndex:
 
             meta = self.metadata[idx]
 
-            # -------------------------------------------------
-            # region aware filtering
-            # -------------------------------------------------
-            
+            # ---------------------------------------------
+            # region-aware filtering
+            # ---------------------------------------------
+
             if query_region == "upper":
-            
+
                 if meta.get("category") not in [
                     "top",
                     "shirt",
@@ -238,9 +294,9 @@ class HNSWIndex:
                     "blouse",
                 ]:
                     continue
-            
+
             elif query_region == "lower":
-            
+
                 if meta.get("category") not in [
                     "bottom",
                     "pants",
@@ -250,20 +306,36 @@ class HNSWIndex:
                     "legging",
                 ]:
                     continue
-            
+
             similarity = 1.0 - float(dist)
 
             rerank_score = similarity
 
-            if query_category is not None:
+            # ---------------------------------------------
+            # metadata reranking
+            # ---------------------------------------------
 
-                if meta.get("category") == query_category:
-                    rerank_score += 0.15
+            if (
+                query_category is not None
+                and
+                meta.get("category")
+                == query_category
+            ):
 
-            if query_gender is not None:
+                rerank_score += 0.15
 
-                if meta.get("gender") == query_gender:
-                    rerank_score += 0.04
+            if (
+                query_gender is not None
+                and
+                meta.get("gender")
+                == query_gender
+            ):
+
+                rerank_score += 0.04
+
+            # ---------------------------------------------
+            # caption reranking
+            # ---------------------------------------------
 
             caption = self.captions[idx]
 
@@ -272,22 +344,44 @@ class HNSWIndex:
                 caption_lower = caption.lower()
 
                 if any(k in caption_lower for k in [
+
                     "oversized",
                     "casual",
+                    "streetwear",
                     "loose",
-                    "streetwear"
+                    "minimalist",
+                    "athletic",
                 ]):
+
                     rerank_score += 0.02
 
             results.append({
-                "rank": rank + 1,
-                "score": similarity,
-                "rerank_score": rerank_score,
-                "item_id": item_id,
-                "img_path": self.img_paths[idx],
-                "caption": caption,
-                "metadata": meta,
+
+                "rank":
+                    rank + 1,
+
+                "score":
+                    similarity,
+
+                "rerank_score":
+                    rerank_score,
+
+                "item_id":
+                    item_id,
+
+                "img_path":
+                    self.img_paths[idx],
+
+                "caption":
+                    caption,
+
+                "metadata":
+                    meta,
             })
+
+        # -------------------------------------------------
+        # final rerank
+        # -------------------------------------------------
 
         results = sorted(
             results,
@@ -324,7 +418,10 @@ class HNSWIndex:
     # SAVE
     # =====================================================
 
-    def save(self, save_dir: str):
+    def save(
+        self,
+        save_dir: str
+    ):
 
         save_dir = Path(save_dir)
 
@@ -334,15 +431,28 @@ class HNSWIndex:
         )
 
         self._index.save_index(
-            str(save_dir / "hnsw.bin")
+            str(
+                save_dir /
+                "hnsw.bin"
+            )
         )
 
         meta = {
-            "dim": self.dim,
-            "item_ids": self.item_ids,
-            "captions": self.captions,
-            "img_paths": self.img_paths,
-            "metadata": self.metadata,
+
+            "dim":
+                self.dim,
+
+            "item_ids":
+                self.item_ids,
+
+            "captions":
+                self.captions,
+
+            "img_paths":
+                self.img_paths,
+
+            "metadata":
+                self.metadata,
         }
 
         with open(
@@ -350,10 +460,14 @@ class HNSWIndex:
             "w"
         ) as f:
 
-            json.dump(meta, f)
+            json.dump(
+                meta,
+                f
+            )
 
         print(
-            f"[Index] Saved {len(self)} vectors → {save_dir}"
+            f"[Index] Saved "
+            f"{len(self)} vectors"
         )
 
     # =====================================================
@@ -368,9 +482,9 @@ class HNSWIndex:
 
         save_dir = Path(save_dir)
 
-        meta_path = save_dir / "metadata.json"
-
-        with open(meta_path) as f:
+        with open(
+            save_dir / "metadata.json"
+        ) as f:
 
             meta = json.load(f)
 
@@ -392,7 +506,10 @@ class HNSWIndex:
         )
 
         obj._index.load_index(
-            str(save_dir / "hnsw.bin")
+            str(
+                save_dir /
+                "hnsw.bin"
+            )
         )
 
         obj._index.set_ef(
@@ -400,7 +517,8 @@ class HNSWIndex:
         )
 
         print(
-            f"[Index] Loaded {len(obj)} vectors from {save_dir}"
+            f"[Index] Loaded "
+            f"{len(obj)} vectors"
         )
 
         return obj
