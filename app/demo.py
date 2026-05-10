@@ -1,20 +1,39 @@
+"""
+Final Streamlit Demo
+ViT-L-14 Visual Product Search
+"""
+
 import argparse
 import sys
 import time
 from pathlib import Path
 
 import streamlit as st
+
 import torch
 import torch.nn.functional as F
+
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
+
 sys.path.insert(0, str(ROOT))
 
-from src.dataset import get_clip_transform
-from src.index import HNSWIndex
-from src.localizer import YOLOLocalizer
-from src.model import VisualSearchModel
+from src.dataset import (
+    get_clip_transform
+)
+
+from src.index import (
+    HNSWIndex
+)
+
+from src.localizer import (
+    YOLOLocalizer
+)
+
+from src.model import (
+    VisualSearchModel
+)
 
 
 # =========================================================
@@ -55,7 +74,7 @@ def parse_args():
     p.add_argument(
         "--top_k",
         type=int,
-        default=10,
+        default=12,
     )
 
     p.add_argument(
@@ -67,7 +86,41 @@ def parse_args():
 
 
 # =========================================================
-# LOAD MODEL
+# STYLE
+# =========================================================
+
+def apply_style():
+
+    st.markdown(
+        """
+        <style>
+
+        .stApp {
+            background-color: #050816;
+            color: white;
+        }
+
+        .hero-title {
+            font-size: 3.5rem;
+            font-weight: 800;
+            opacity: 0.18;
+            margin-bottom: 0.4rem;
+        }
+
+        .metric-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 0.5rem;
+        }
+
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# =========================================================
+# MODEL
 # =========================================================
 
 @st.cache_resource
@@ -88,7 +141,7 @@ def load_model(
         pretrained="openai",
         alpha=alpha,
         embed_dim=embed_dim,
-        unfreeze_last_n=4,
+        unfreeze_last_n=6,
     )
 
     state = torch.load(
@@ -113,17 +166,19 @@ def load_model(
 
 
 # =========================================================
-# LOAD INDEX
+# INDEX
 # =========================================================
 
 @st.cache_resource
 def load_index(index_dir):
 
-    return HNSWIndex.load(index_dir)
+    return HNSWIndex.load(
+        index_dir
+    )
 
 
 # =========================================================
-# LOAD YOLO
+# YOLO
 # =========================================================
 
 @st.cache_resource
@@ -141,7 +196,7 @@ def load_localizer(weights):
 
 
 # =========================================================
-# EMBEDDING
+# MULTI-CROP EMBEDDING
 # =========================================================
 
 @torch.no_grad()
@@ -152,16 +207,51 @@ def build_embedding(
 ):
 
     transform = get_clip_transform(
-        224,
+        image_size=224,
         augment=False
     )
 
-    img_tensor = transform(
-        image
-    ).unsqueeze(0).to(device)
+    w, h = image.size
+
+    full = image
+
+    center = image.crop((
+        int(0.15 * w),
+        int(0.15 * h),
+        int(0.85 * w),
+        int(0.85 * h)
+    ))
+
+    upper = image.crop((
+        0,
+        0,
+        w,
+        int(0.7 * h)
+    ))
+
+    imgs = [
+
+        transform(full),
+
+        transform(center),
+
+        transform(upper),
+    ]
+
+    imgs = torch.stack(
+        imgs
+    ).to(device)
 
     emb = model.encode_image(
-        img_tensor
+        imgs
+    )
+
+    emb = (
+        0.5 * emb[0]
+        +
+        0.3 * emb[1]
+        +
+        0.2 * emb[2]
     )
 
     emb = F.normalize(
@@ -169,7 +259,7 @@ def build_embedding(
         dim=-1
     )
 
-    return emb.cpu().numpy()[0]
+    return emb.cpu().numpy()
 
 
 # =========================================================
@@ -200,33 +290,6 @@ def retrieve(
 
 
 # =========================================================
-# STYLE
-# =========================================================
-
-def apply_style():
-
-    st.markdown(
-        """
-        <style>
-
-        .stApp {
-            background-color: #050816;
-            color: white;
-        }
-
-        .hero-title {
-            font-size: 4rem;
-            font-weight: 800;
-            opacity: 0.15;
-        }
-
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-# =========================================================
 # MAIN
 # =========================================================
 
@@ -249,11 +312,15 @@ def main():
     )
 
     st.markdown(
-        "Upload a clothing image "
-        "to retrieve visually similar products."
+        "Upload a clothing image to retrieve "
+        "visually similar products."
     )
 
     st.markdown("---")
+
+    # =====================================================
+    # LOAD
+    # =====================================================
 
     with st.spinner(
         "Loading models..."
@@ -301,7 +368,7 @@ def main():
             crop = image
 
             # -------------------------------------------------
-            # YOLO crop (demo only)
+            # YOLO localization
             # -------------------------------------------------
 
             if localizer is not None:
@@ -322,7 +389,7 @@ def main():
                     st.image(
                         crop,
                         caption=(
-                            f"Detected "
+                            f"Localized "
                             f"(conf={conf:.2f})"
                         ),
                         use_container_width=True
@@ -425,10 +492,19 @@ def main():
 
                         st.markdown(
                             f"""
-                            **Score:** {r['score']:.4f}
+                            <div class="metric-card">
 
-                            **Item ID:** {r['item_id']}
-                            """
+                            <b>Similarity:</b>
+                            {r['score']:.4f}
+
+                            <br>
+
+                            <b>Item:</b>
+                            {r['item_id']}
+
+                            </div>
+                            """,
+                            unsafe_allow_html=True
                         )
 
                         caption = r.get(
@@ -439,9 +515,17 @@ def main():
                         if caption:
 
                             st.caption(
-                                caption[:120]
+                                caption[:140]
                             )
+
+    st.markdown("---")
+
+    st.caption(
+        "ViT-L-14 • Hard Negative Fine-Tuning "
+        "• HNSW Retrieval • BLIP Fusion"
+    )
 
 
 if __name__ == "__main__":
+
     main()
