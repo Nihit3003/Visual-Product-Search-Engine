@@ -4,10 +4,9 @@ Improved DeepFashion In-Shop Dataset
 Enhancements:
 - robust bbox handling
 - category-aware metadata
-- hard-negative friendly sampling
+- hard-negative triplet sampling
 - improved augmentation
 - safer image loading
-- better SupCon batch construction
 """
 
 import random
@@ -20,7 +19,6 @@ import torch
 from torch.utils.data import (
     Dataset,
     DataLoader,
-    Sampler
 )
 
 from torchvision import transforms
@@ -52,7 +50,12 @@ def parse_eval_partition(partition_file: str):
             continue
 
         img_path = parts[0]
+
+        if img_path.startswith("img/"):
+            img_path = img_path[4:]
+
         item_id = parts[1]
+
         split = parts[2].lower()
 
         img_to_item[img_path] = item_id
@@ -75,16 +78,27 @@ def parse_bboxes(bbox_file: str):
 
         parts = line.strip().split()
 
-        if len(parts) < 6:
+        if len(parts) < 7:
             continue
 
         img_path = parts[0]
 
+        if img_path.startswith("img/"):
+            img_path = img_path[4:]
+
         try:
 
-            bbox = [int(x) for x in parts[2:6]]
+            x1 = int(parts[3])
+            y1 = int(parts[4])
+            x2 = int(parts[5])
+            y2 = int(parts[6])
 
-            img_to_bbox[img_path] = bbox
+            img_to_bbox[img_path] = (
+                x1,
+                y1,
+                x2,
+                y2
+            )
 
         except Exception:
             continue
@@ -125,7 +139,36 @@ def infer_category(rel_path: str):
 
 
 # =========================================================
-# DATASET
+# BBOX CROP
+# =========================================================
+
+def bbox_crop(
+    image,
+    bbox,
+    pad=0.05
+):
+
+    x1, y1, x2, y2 = bbox
+
+    w, h = image.size
+
+    px = int((x2 - x1) * pad)
+    py = int((y2 - y1) * pad)
+
+    x1 = max(0, x1 - px)
+    y1 = max(0, y1 - py)
+
+    x2 = min(w, x2 + px)
+    y2 = min(h, y2 + py)
+
+    if x2 <= x1 or y2 <= y1:
+        return image
+
+    return image.crop((x1, y1, x2, y2))
+
+
+# =========================================================
+# MAIN DATASET
 # =========================================================
 
 class DeepFashionDataset(Dataset):
@@ -152,9 +195,10 @@ class DeepFashionDataset(Dataset):
 
         self.use_gt_bbox = use_gt_bbox
 
-        # -----------------------------------------
-        # labels
-        # -----------------------------------------
+        self.img_to_category = {
+            p: infer_category(p)
+            for p in image_paths
+        }
 
         self.item_ids = sorted(
             list(set(
@@ -169,42 +213,25 @@ class DeepFashionDataset(Dataset):
             in enumerate(self.item_ids)
         }
 
-        # -----------------------------------------
-        # categories
-        # -----------------------------------------
-
-        self.img_to_category = {
-            p: infer_category(p)
-            for p in image_paths
-        }
-
-        # -----------------------------------------
-        # category groups
-        # -----------------------------------------
-
-        self.category_to_indices = defaultdict(list)
-
-        for idx, p in enumerate(image_paths):
-
-            cat = self.img_to_category[p]
-
-            self.category_to_indices[cat].append(idx)
-
     # =====================================================
-    # LOAD IMAGE
+    # IMAGE LOADING
     # =====================================================
 
-    def _load_image(self, rel_path):
+    def _load_image(
+        self,
+        rel_path
+    ):
 
         full_path = self.img_root / rel_path
 
         try:
 
-            image = Image.open(full_path).convert("RGB")
+            image = Image.open(
+                full_path
+            ).convert("RGB")
 
         except Exception:
 
-            # corrupted image fallback
             image = Image.new(
                 "RGB",
                 (224, 224),
@@ -213,44 +240,20 @@ class DeepFashionDataset(Dataset):
 
             return image
 
-        # -------------------------------------------------
-        # GT bbox crop
-        # -------------------------------------------------
-
-        if self.use_gt_bbox and rel_path in self.img_to_bbox:
+        if (
+            self.use_gt_bbox
+            and rel_path in self.img_to_bbox
+        ):
 
             try:
 
-                x1, y1, x2, y2 = self.img_to_bbox[rel_path]
-
-                w, h = image.size
-
-                # clamp
-
-                x1 = max(0, min(x1, w - 1))
-                y1 = max(0, min(y1, h - 1))
-
-                x2 = max(1, min(x2, w))
-                y2 = max(1, min(y2, h))
-
-                # invalid bbox
-
-                if x2 <= x1 or y2 <= y1:
-                    return image
-
-                # reject tiny crops
-
-                bw = x2 - x1
-                bh = y2 - y1
-
-                if bw < 20 or bh < 20:
-                    return image
-
-                image = image.crop((x1, y1, x2, y2))
+                image = bbox_crop(
+                    image,
+                    self.img_to_bbox[rel_path]
+                )
 
             except Exception:
-
-                return image
+                pass
 
         return image
 
@@ -266,11 +269,16 @@ class DeepFashionDataset(Dataset):
     # GET ITEM
     # =====================================================
 
-    def __getitem__(self, idx):
+    def __getitem__(
+        self,
+        idx
+    ):
 
         rel_path = self.image_paths[idx]
 
-        image = self._load_image(rel_path)
+        image = self._load_image(
+            rel_path
+        )
 
         if self.transform:
 
@@ -292,7 +300,150 @@ class DeepFashionDataset(Dataset):
 
 
 # =========================================================
-# CLIP TRANSFORMS
+# HARD NEGATIVE DATASET
+# =========================================================
+
+class HardNegTripletDataset(Dataset):
+
+    """
+    Returns:
+        anchor,
+        positive,
+        hard_negative
+    """
+
+    def __init__(
+        self,
+        rows,
+        img_root,
+        bbox_map,
+        hard_neg_pool,
+        transform,
+    ):
+
+        self.img_root = Path(img_root)
+
+        self.bbox_map = bbox_map
+
+        self.hard_neg_pool = hard_neg_pool
+
+        self.transform = transform
+
+        groups = defaultdict(list)
+
+        for r in rows:
+
+            groups[r["item_id"]].append(
+                r["image_name"]
+            )
+
+        self.items = [
+
+            (iid, imgs)
+
+            for iid, imgs in groups.items()
+
+            if len(imgs) >= 2
+        ]
+
+    # =====================================================
+    # LOAD
+    # =====================================================
+
+    def _load(
+        self,
+        name
+    ):
+
+        p = self.img_root / name
+
+        image = Image.open(
+            p
+        ).convert("RGB")
+
+        bbox = self.bbox_map.get(name)
+
+        if bbox is not None:
+
+            image = bbox_crop(
+                image,
+                bbox
+            )
+
+        return self.transform(image)
+
+    # =====================================================
+    # LEN
+    # =====================================================
+
+    def __len__(self):
+
+        return len(self.items)
+
+    # =====================================================
+    # GET ITEM
+    # =====================================================
+
+    def __getitem__(
+        self,
+        idx
+    ):
+
+        item_id, imgs = self.items[idx]
+
+        anc_name, pos_name = random.sample(
+            imgs,
+            2
+        )
+
+        hn_pool = self.hard_neg_pool.get(
+            anc_name,
+            []
+        )
+
+        if len(hn_pool) > 0:
+
+            neg_name = random.choice(
+                hn_pool
+            )
+
+        else:
+
+            neg_name = anc_name
+
+        try:
+
+            anchor = self._load(
+                anc_name
+            )
+
+            positive = self._load(
+                pos_name
+            )
+
+            negative = self._load(
+                neg_name
+            )
+
+        except Exception:
+
+            anchor = self._load(
+                anc_name
+            )
+
+            positive = anchor
+
+            negative = anchor
+
+        return (
+            anchor,
+            positive,
+            negative
+        )
+
+
+# =========================================================
+# TRANSFORMS
 # =========================================================
 
 def get_clip_transform(
@@ -318,21 +469,16 @@ def get_clip_transform(
 
             transforms.RandomResizedCrop(
                 image_size,
-                scale=(0.65, 1.0)
+                scale=(0.7, 1.0)
             ),
 
             transforms.RandomHorizontalFlip(),
 
             transforms.ColorJitter(
-                brightness=0.25,
-                contrast=0.25,
+                brightness=0.2,
+                contrast=0.2,
                 saturation=0.15,
                 hue=0.02,
-            ),
-
-            transforms.RandomPerspective(
-                distortion_scale=0.15,
-                p=0.2,
             ),
 
             transforms.ToTensor(),
@@ -359,159 +505,7 @@ def get_clip_transform(
 
 
 # =========================================================
-# HARD NEGATIVE BALANCED SAMPLER
-# =========================================================
-
-class ClassBalancedSampler(Sampler):
-
-    """
-    Creates retrieval-friendly batches.
-
-    Improvements:
-    - class balancing
-    - category-aware hard negatives
-    - stronger SupCon learning
-    """
-
-    def __init__(
-        self,
-        dataset,
-        classes_per_batch=32,
-        samples_per_class=4,
-    ):
-
-        self.dataset = dataset
-
-        self.classes_per_batch = classes_per_batch
-
-        self.samples_per_class = samples_per_class
-
-        self.class_to_indices = defaultdict(list)
-
-        self.class_to_category = {}
-
-        for idx, rel_path in enumerate(
-            dataset.image_paths
-        ):
-
-            item_id = dataset.img_to_item[rel_path]
-
-            category = dataset.img_to_category[rel_path]
-
-            self.class_to_indices[item_id].append(idx)
-
-            self.class_to_category[item_id] = category
-
-        self.classes = list(
-            self.class_to_indices.keys()
-        )
-
-        # -----------------------------------------
-        # category groupings
-        # -----------------------------------------
-
-        self.category_to_classes = defaultdict(list)
-
-        for cls in self.classes:
-
-            cat = self.class_to_category[cls]
-
-            self.category_to_classes[cat].append(cls)
-
-        self.batch_size = (
-            classes_per_batch *
-            samples_per_class
-        )
-
-    # =====================================================
-    # ITER
-    # =====================================================
-
-    def __iter__(self):
-
-        random.shuffle(self.classes)
-
-        batch = []
-
-        used_classes = set()
-
-        for cls in self.classes:
-
-            if cls in used_classes:
-                continue
-
-            used_classes.add(cls)
-
-            indices = self.class_to_indices[cls]
-
-            # -------------------------------------
-            # positive sampling
-            # -------------------------------------
-
-            if len(indices) >= self.samples_per_class:
-
-                sampled = random.sample(
-                    indices,
-                    self.samples_per_class
-                )
-
-            else:
-
-                sampled = random.choices(
-                    indices,
-                    k=self.samples_per_class
-                )
-
-            batch.extend(sampled)
-
-            # -------------------------------------
-            # category-aware hard negatives
-            # -------------------------------------
-
-            category = self.class_to_category[cls]
-
-            same_cat_classes = [
-                c for c in
-                self.category_to_classes[category]
-                if c != cls
-            ]
-
-            random.shuffle(same_cat_classes)
-
-            for neg_cls in same_cat_classes[:2]:
-
-                neg_indices = self.class_to_indices[neg_cls]
-
-                batch.append(
-                    random.choice(neg_indices)
-                )
-
-            # -------------------------------------
-            # emit batch
-            # -------------------------------------
-
-            if len(batch) >= self.batch_size:
-
-                batch = batch[:self.batch_size]
-
-                yield from batch
-
-                batch = []
-
-    # =====================================================
-    # LEN
-    # =====================================================
-
-    def __len__(self):
-
-        return (
-            len(self.classes)
-            * self.samples_per_class
-        )
-
-
-# =========================================================
-# BUILD DATALOADERS
+# BUILDERS
 # =========================================================
 
 def build_dataloaders(
@@ -540,15 +534,9 @@ def build_dataloaders(
         str(partition_file)
     )
 
-    if bbox_file.exists():
-
-        img_to_bbox = parse_bboxes(
-            str(bbox_file)
-        )
-
-    else:
-
-        img_to_bbox = {}
+    img_to_bbox = parse_bboxes(
+        str(bbox_file)
+    )
 
     loaders = {}
 
@@ -558,7 +546,9 @@ def build_dataloaders(
         "gallery"
     ]:
 
-        augment = (split == "train")
+        augment = (
+            split == "train"
+        )
 
         dataset = DeepFashionDataset(
             img_root=str(img_root),
@@ -572,51 +562,20 @@ def build_dataloaders(
             use_gt_bbox=use_gt_bbox,
         )
 
-        # -----------------------------------------
-        # train loader
-        # -----------------------------------------
-
-        if split == "train":
-
-            sampler = ClassBalancedSampler(
-                dataset,
-                classes_per_batch=max(
-                    8,
-                    batch_size // 6
-                ),
-                samples_per_class=4,
-            )
-
-            loader = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                sampler=sampler,
-                num_workers=num_workers,
-                pin_memory=True,
-                drop_last=True,
-            )
-
-        # -----------------------------------------
-        # eval loader
-        # -----------------------------------------
-
-        else:
-
-            loader = DataLoader(
-                dataset,
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=num_workers,
-                pin_memory=True,
-                drop_last=False,
-            )
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=(split == "train"),
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=(split == "train"),
+        )
 
         loaders[split] = loader
 
         print(
             f"[Dataset] {split:8s}: "
-            f"{len(dataset):,} images | "
-            f"{len(dataset.item_ids):,} unique items"
+            f"{len(dataset):,} images"
         )
 
     return loaders
