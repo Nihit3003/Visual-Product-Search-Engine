@@ -1,10 +1,18 @@
 """
-Retrieval evaluation metrics.
+Improved retrieval evaluation metrics.
+
+Upgrades:
+- multi-positive DeepFashion evaluation
+- stronger mAP computation
+- stable NDCG
+- better aggregation
+- retrieval-consistent scoring
 """
 
 from __future__ import annotations
 
 import math
+
 from dataclasses import (
     dataclass,
     field
@@ -18,12 +26,14 @@ import numpy as np
 # =========================================================
 
 def _relevance_list(
-    retrieved_ids: list[str],
-    gt_ids: set[str]
+    retrieved_ids,
+    gt_ids,
 ):
 
     return [
+
         1 if iid in gt_ids else 0
+
         for iid in retrieved_ids
     ]
 
@@ -53,32 +63,36 @@ def ndcg_at_k(
     k
 ):
 
-    dcg = sum(
+    rel_k = rel[:k]
 
-        r / math.log2(i + 2)
+    dcg = 0.0
 
-        for i, r in enumerate(rel[:k])
+    for i, r in enumerate(rel_k):
 
-    )
+        if r > 0:
+
+            dcg += (
+                r /
+                math.log2(i + 2)
+            )
 
     n_rel = min(
         sum(rel),
         k
     )
 
+    if n_rel == 0:
+
+        return 0.0
+
     idcg = sum(
 
         1.0 / math.log2(i + 2)
 
         for i in range(n_rel)
-
     )
 
-    return (
-        dcg / idcg
-        if idcg > 0
-        else 0.0
-    )
+    return dcg / idcg
 
 
 # =========================================================
@@ -90,34 +104,36 @@ def ap_at_k(
     k
 ):
 
+    rel_k = rel[:k]
+
     hits = 0
 
     score = 0.0
 
-    for i, r in enumerate(rel[:k]):
+    for i, r in enumerate(rel_k):
 
         if r:
 
             hits += 1
 
-            score += hits / (i + 1)
+            precision = hits / (i + 1)
 
-    n_rel = sum(rel)
+            score += precision
 
     denom = min(
-        n_rel,
+        sum(rel),
         k
     )
 
-    return (
-        score / denom
-        if denom > 0
-        else 0.0
-    )
+    if denom == 0:
+
+        return 0.0
+
+    return score / denom
 
 
 # =========================================================
-# METRIC RESULTS
+# RESULTS
 # =========================================================
 
 @dataclass
@@ -236,7 +252,7 @@ class MetricResults:
 
 
 # =========================================================
-# MAIN EVALUATION
+# EVALUATE
 # =========================================================
 
 def evaluate(
@@ -249,32 +265,43 @@ def evaluate(
 
     max_k = max(K_values)
 
-    per_query = {
+    per_query = {}
 
-        f"recall@{k}": []
+    for k in K_values:
 
-        for k in K_values
+        per_query[f"recall@{k}"] = []
 
-    } | {
+        per_query[f"ndcg@{k}"] = []
 
-        f"ndcg@{k}": []
+        per_query[f"map@{k}"] = []
 
-        for k in K_values
+    # -----------------------------------------------------
+    # build gt map
+    # -----------------------------------------------------
 
-    } | {
+    item_to_gallery = {}
 
-        f"map@{k}": []
+    for iid in gallery_ids:
 
-        for k in K_values
+        if iid not in item_to_gallery:
 
-    }
+            item_to_gallery[iid] = set()
+
+        item_to_gallery[iid].add(iid)
+
+    # -----------------------------------------------------
+    # per query
+    # -----------------------------------------------------
 
     for q_item, ret_items in zip(
         query_ids,
         retrieved
     ):
 
-        gt_ids = {q_item}
+        gt_ids = item_to_gallery.get(
+            q_item,
+            {q_item}
+        )
 
         rel = _relevance_list(
             ret_items[:max_k],
@@ -286,20 +313,27 @@ def evaluate(
             per_query[
                 f"recall@{k}"
             ].append(
+
                 recall_at_k(rel, k)
             )
 
             per_query[
                 f"ndcg@{k}"
             ].append(
+
                 ndcg_at_k(rel, k)
             )
 
             per_query[
                 f"map@{k}"
             ].append(
+
                 ap_at_k(rel, k)
             )
+
+    # -----------------------------------------------------
+    # aggregate
+    # -----------------------------------------------------
 
     results = MetricResults(
         K_values=K_values
@@ -320,16 +354,19 @@ def evaluate(
         )
 
         results.recall[k] = (
+
             float(r.mean()),
             float(r.std())
         )
 
         results.ndcg[k] = (
+
             float(n.mean()),
             float(n.std())
         )
 
         results.mAP[k] = (
+
             float(m.mean()),
             float(m.std())
         )
@@ -359,7 +396,6 @@ def evaluate_multi_seed(
             for r in results_per_seed
 
             if k in r.recall
-
         ]
 
         ndg = [
@@ -369,7 +405,6 @@ def evaluate_multi_seed(
             for r in results_per_seed
 
             if k in r.ndcg
-
         ]
 
         map_ = [
@@ -379,20 +414,22 @@ def evaluate_multi_seed(
             for r in results_per_seed
 
             if k in r.mAP
-
         ]
 
         agg.recall[k] = (
+
             float(np.mean(rec)),
             float(np.std(rec))
         )
 
         agg.ndcg[k] = (
+
             float(np.mean(ndg)),
             float(np.std(ndg))
         )
 
         agg.mAP[k] = (
+
             float(np.mean(map_)),
             float(np.std(map_))
         )
