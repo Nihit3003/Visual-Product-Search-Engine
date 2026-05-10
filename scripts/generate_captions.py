@@ -1,3 +1,8 @@
+"""
+Offline BLIP caption generation
+for multimodal retrieval fusion.
+"""
+
 import argparse
 import json
 import sys
@@ -15,7 +20,10 @@ from transformers import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.localizer import YOLOLocalizer
+from src.dataset import (
+    parse_bboxes,
+    bbox_crop,
+)
 
 
 # =========================================================
@@ -50,14 +58,14 @@ def parse_args():
     parser.add_argument(
         "--limit",
         type=int,
-        default=5000,
+        default=None,
     )
 
     return parser.parse_args()
 
 
 # =========================================================
-# CAPTION GENERATOR
+# CAPTIONER
 # =========================================================
 
 class CaptionGenerator:
@@ -76,7 +84,10 @@ class CaptionGenerator:
 
         self.max_new_tokens = max_new_tokens
 
-        print(f"[BLIP-2] Loading {model_id}")
+        print(
+            f"[BLIP-2] Loading "
+            f"{model_id}"
+        )
 
         self.processor = (
             Blip2Processor.from_pretrained(
@@ -93,13 +104,21 @@ class CaptionGenerator:
                     if self.device == "cuda"
                     else torch.float32
                 ),
-                device_map="auto" if self.device == "cuda" else None,
+                device_map=(
+                    "auto"
+                    if self.device == "cuda"
+                    else None
+                ),
             )
         )
 
         self.model.eval()
 
         print("[BLIP-2] Ready")
+
+    # =====================================================
+    # GENERATE
+    # =====================================================
 
     def generate(
         self,
@@ -108,18 +127,24 @@ class CaptionGenerator:
 
         prompt = (
             "Describe the clothing item "
-            "including color, style, fit, "
-            "and clothing type."
+            "including color, clothing type, "
+            "fit, fabric, and style."
         )
 
         inputs = self.processor(
             images=image,
             text=prompt,
             return_tensors="pt"
-        ).to(
-            self.device,
-            torch.float16
         )
+
+        inputs = {
+
+            k: v.to(
+                self.device
+            )
+
+            for k, v in inputs.items()
+        }
 
         with torch.no_grad():
 
@@ -154,23 +179,30 @@ def main():
 
     img_root = dataset_root / "img"
 
-    all_images = list(
+    bbox_map = parse_bboxes(
+        dataset_root /
+        "list_bbox_inshop.txt"
+    )
+
+    all_images = sorted(
         img_root.rglob("*.jpg")
     )
 
-    all_images = all_images[:args.limit]
+    if args.limit is not None:
+
+        all_images = all_images[
+            :args.limit
+        ]
 
     print(
-        f"[Data] Using "
-        f"{len(all_images):,} images"
+        f"[Data] Images: "
+        f"{len(all_images):,}"
     )
 
     captioner = CaptionGenerator(
         model_id=args.model_id,
         max_new_tokens=args.max_new_tokens,
     )
-
-    localizer = YOLOLocalizer()
 
     results = {}
 
@@ -185,23 +217,30 @@ def main():
                 path
             ).convert("RGB")
 
-            detection = localizer.detect(
-                image
-            )
-
-            crop = detection["cropped"]
-
-            caption = captioner.generate(
-                crop
-            )
-
             rel_path = str(
                 path.relative_to(img_root)
             )
 
-            results[rel_path] = {
-                "caption": caption
-            }
+            # ---------------------------------------------
+            # GT bbox crop
+            # ---------------------------------------------
+
+            bbox = bbox_map.get(
+                rel_path
+            )
+
+            if bbox is not None:
+
+                image = bbox_crop(
+                    image,
+                    bbox
+                )
+
+            caption = captioner.generate(
+                image
+            )
+
+            results[rel_path] = caption
 
         except Exception as e:
 
@@ -221,7 +260,10 @@ def main():
         exist_ok=True
     )
 
-    with open(output_path, "w") as f:
+    with open(
+        output_path,
+        "w"
+    ) as f:
 
         json.dump(
             results,
@@ -230,7 +272,7 @@ def main():
         )
 
     print(
-        f"\nSaved captions to: "
+        f"\nSaved captions → "
         f"{output_path}"
     )
 
