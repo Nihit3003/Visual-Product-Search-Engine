@@ -3,25 +3,17 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import streamlit as st
 import torch
 import torch.nn.functional as F
-
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.dataset import (
-    get_clip_transform,
-    infer_category,
-)
-
+from src.dataset import get_clip_transform
 from src.index import HNSWIndex
-
 from src.localizer import YOLOLocalizer
-
 from src.model import VisualSearchModel
 
 
@@ -35,54 +27,54 @@ def parse_args():
 
     p.add_argument(
         "--dataset_root",
-        default="/kaggle/input/deepfashion-inshop"
+        required=True,
     )
 
     p.add_argument(
         "--index_dir",
-        default="/kaggle/working/index/condition_C_alpha0.7"
+        required=True,
     )
 
     p.add_argument(
         "--ckpt_path",
-        default=None
+        required=True,
     )
 
     p.add_argument(
         "--embed_dim",
         type=int,
-        default=256
+        default=768,
     )
 
     p.add_argument(
         "--alpha",
         type=float,
-        default=0.7
+        default=0.7,
     )
 
     p.add_argument(
         "--top_k",
         type=int,
-        default=10
+        default=10,
     )
 
     p.add_argument(
         "--yolo_weights",
-        default="yolov8n.pt"
+        default="yolov8n.pt",
     )
 
     return p.parse_args()
 
 
 # =========================================================
-# LOADERS
+# LOAD MODEL
 # =========================================================
 
 @st.cache_resource
 def load_model(
     ckpt_path,
     alpha,
-    embed_dim
+    embed_dim,
 ):
 
     device = (
@@ -92,35 +84,37 @@ def load_model(
     )
 
     model = VisualSearchModel(
+        clip_model_name="ViT-L-14",
+        pretrained="openai",
         alpha=alpha,
         embed_dim=embed_dim,
-        unfreeze_last_n=4
+        unfreeze_last_n=4,
     )
 
-    if (
-        ckpt_path
-        and
-        Path(ckpt_path).exists()
-    ):
+    state = torch.load(
+        ckpt_path,
+        map_location=device
+    )
 
-        state = torch.load(
-            ckpt_path,
-            map_location=device
-        )
+    if "model_state_dict" in state:
 
-        if "model_state_dict" in state:
+        state = state[
+            "model_state_dict"
+        ]
 
-            state = state["model_state_dict"]
-
-        model.load_state_dict(
-            state,
-            strict=False
-        )
+    model.load_state_dict(
+        state,
+        strict=False
+    )
 
     model.eval().to(device)
 
     return model, device
 
+
+# =========================================================
+# LOAD INDEX
+# =========================================================
 
 @st.cache_resource
 def load_index(index_dir):
@@ -128,13 +122,17 @@ def load_index(index_dir):
     return HNSWIndex.load(index_dir)
 
 
+# =========================================================
+# LOAD YOLO
+# =========================================================
+
 @st.cache_resource
-def load_localizer(yolo_weights):
+def load_localizer(weights):
 
     try:
 
         return YOLOLocalizer(
-            weights=yolo_weights
+            weights=weights
         )
 
     except Exception:
@@ -143,13 +141,14 @@ def load_localizer(yolo_weights):
 
 
 # =========================================================
-# MULTI-CROP EMBEDDING
+# EMBEDDING
 # =========================================================
 
+@torch.no_grad()
 def build_embedding(
-    img,
+    image,
     model,
-    device
+    device,
 ):
 
     transform = get_clip_transform(
@@ -157,50 +156,12 @@ def build_embedding(
         augment=False
     )
 
-    w, h = img.size
+    img_tensor = transform(
+        image
+    ).unsqueeze(0).to(device)
 
-    full = img
-
-    center = img.crop((
-        int(0.15 * w),
-        int(0.15 * h),
-        int(0.85 * w),
-        int(0.85 * h)
-    ))
-
-    upper = img.crop((
-        0,
-        0,
-        w,
-        int(0.7 * h)
-    ))
-
-    crops = [
-        full,
-        center,
-        upper
-    ]
-
-    batch = torch.stack([
-
-        transform(c)
-
-        for c in crops
-
-    ]).to(device)
-
-    with torch.no_grad():
-
-        embs = model.encode_image(
-            batch
-        )
-
-    emb = (
-        0.5 * embs[0]
-        +
-        0.3 * embs[1]
-        +
-        0.2 * embs[2]
+    emb = model.encode_image(
+        img_tensor
     )
 
     emb = F.normalize(
@@ -208,27 +169,11 @@ def build_embedding(
         dim=-1
     )
 
-    return emb.cpu().numpy()
+    return emb.cpu().numpy()[0]
 
 
 # =========================================================
-# CATEGORY HEURISTIC
-# =========================================================
-
-def predict_category(img):
-
-    w, h = img.size
-
-    aspect = h / max(w, 1)
-
-    if aspect > 1.3:
-        return "top"
-
-    return "unknown"
-
-
-# =========================================================
-# RETRIEVAL
+# SEARCH
 # =========================================================
 
 def retrieve(
@@ -237,100 +182,21 @@ def retrieve(
     index,
     device,
     top_k,
-    search_region,
 ):
-
-    query_category = predict_category(
-        query_img
-    )
 
     q_emb = build_embedding(
         query_img,
         model,
-        device
+        device,
     )
 
-    region_map = {
-
-        "Upper Body":
-            "upper",
-
-        "Lower Body":
-            "lower",
-
-        "Full Outfit":
-            None,
-    }
-
-    candidates = index.search(
-
+    results = index.search(
         q_emb,
-
-        top_k=max(
-            top_k * 3,
-            40
-        ),
-
-        query_region=region_map.get(
-            search_region,
-            None
-        ),
-
-        query_category=query_category,
+        top_k=top_k,
+        deduplicate_items=True,
     )
 
-    filtered = []
-
-    for c in candidates:
-
-        path_str = str(
-            c["img_path"]
-        ).lower()
-
-        category = infer_category(
-            path_str
-        )
-
-        score = float(
-            c["rerank_score"]
-        )
-
-        # -------------------------------------------------
-        # reranking boosts
-        # -------------------------------------------------
-
-        if category == query_category:
-
-            score += 0.10
-
-        caption = c.get(
-            "caption",
-            ""
-        ).lower()
-
-        if any(k in caption for k in [
-
-            "oversized",
-            "streetwear",
-            "casual",
-            "minimal",
-            "athletic",
-
-        ]):
-
-            score += 0.015
-
-        c["final_score"] = score
-
-        filtered.append(c)
-
-    filtered = sorted(
-        filtered,
-        key=lambda x: x["final_score"],
-        reverse=True
-    )
-
-    return filtered[:top_k]
+    return results
 
 
 # =========================================================
@@ -343,11 +209,6 @@ def apply_style():
         """
         <style>
 
-        .main {
-            background-color: #050816;
-            color: white;
-        }
-
         .stApp {
             background-color: #050816;
             color: white;
@@ -357,14 +218,6 @@ def apply_style():
             font-size: 4rem;
             font-weight: 800;
             opacity: 0.15;
-        }
-
-        .section-label {
-            font-size: 1rem;
-            font-weight: 700;
-            letter-spacing: 2px;
-            margin-top: 20px;
-            margin-bottom: 10px;
         }
 
         </style>
@@ -396,20 +249,20 @@ def main():
     )
 
     st.markdown(
-        "Upload a clothing image → "
-        "find visually similar products instantly"
+        "Upload a clothing image "
+        "to retrieve visually similar products."
     )
 
     st.markdown("---")
 
     with st.spinner(
-        "Loading models and index..."
+        "Loading models..."
     ):
 
         model, device = load_model(
             args.ckpt_path,
             args.alpha,
-            args.embed_dim
+            args.embed_dim,
         )
 
         index = load_index(
@@ -423,173 +276,57 @@ def main():
     left, right = st.columns([1, 2])
 
     # =====================================================
-    # LEFT PANEL
+    # LEFT
     # =====================================================
 
     with left:
 
-        st.markdown(
-            '<div class="section-label">'
-            'QUERY IMAGE'
-            '</div>',
-            unsafe_allow_html=True
-        )
-
         uploaded = st.file_uploader(
-            "Upload an image",
-            type=[
-                "jpg",
-                "jpeg",
-                "png"
-            ]
-        )
-
-        search_region = st.radio(
-            "Select clothing region",
-            [
-                "Upper Body",
-                "Lower Body",
-                "Full Outfit"
-            ]
+            "Upload image",
+            type=["jpg", "jpeg", "png"]
         )
 
         if uploaded:
 
-            img = Image.open(
+            image = Image.open(
                 uploaded
             ).convert("RGB")
 
             st.image(
-                img,
+                image,
                 caption="Original",
                 use_container_width=True
             )
 
-            final_crop = img
+            crop = image
 
             # -------------------------------------------------
-            # YOLO localization
+            # YOLO crop (demo only)
             # -------------------------------------------------
 
             if localizer is not None:
 
                 try:
 
-                    detection = localizer.detect(
-                        img
+                    det = localizer.detect(
+                        image
                     )
 
-                    conf = detection.get(
+                    crop = det["cropped"]
+
+                    conf = det.get(
                         "confidence",
                         0.0
                     )
 
-                    box = detection.get(
-                        "box",
-                        None
+                    st.image(
+                        crop,
+                        caption=(
+                            f"Detected "
+                            f"(conf={conf:.2f})"
+                        ),
+                        use_container_width=True
                     )
-
-                    if box is not None:
-
-                        x1, y1, x2, y2 = box
-
-                        pad_x = int(
-                            0.03 * (x2 - x1)
-                        )
-
-                        pad_y = int(
-                            0.03 * (y2 - y1)
-                        )
-
-                        x1 = max(
-                            0,
-                            x1 + pad_x
-                        )
-
-                        y1 = max(
-                            0,
-                            y1 + pad_y
-                        )
-
-                        x2 = min(
-                            img.width,
-                            x2 - pad_x
-                        )
-
-                        y2 = min(
-                            img.height,
-                            y2 - pad_y
-                        )
-
-                        h_box = y2 - y1
-
-                        full_crop = img.crop((
-                            x1,
-                            y1,
-                            x2,
-                            y2
-                        ))
-
-                        upper_crop = img.crop((
-                            x1,
-                            y1,
-                            x2,
-                            int(y1 + 0.55 * h_box)
-                        ))
-
-                        lower_crop = img.crop((
-                            x1,
-                            int(y1 + 0.45 * h_box),
-                            x2,
-                            y2
-                        ))
-
-                        if (
-                            search_region
-                            ==
-                            "Upper Body"
-                        ):
-
-                            final_crop = upper_crop
-
-                        elif (
-                            search_region
-                            ==
-                            "Lower Body"
-                        ):
-
-                            final_crop = lower_crop
-
-                        else:
-
-                            final_crop = full_crop
-
-                        st.markdown(
-                            '<div class="section-label">'
-                            'DETECTED CROP'
-                            '</div>',
-                            unsafe_allow_html=True
-                        )
-
-                        st.image(
-                            final_crop,
-                            caption=(
-                                f"YOLO crop "
-                                f"(conf={conf:.2f})"
-                            ),
-                            use_container_width=True
-                        )
-
-                        st.success(
-                            f"Detection confidence: "
-                            f"{conf:.2f}"
-                        )
-
-                    else:
-
-                        st.warning(
-                            "No confident detection."
-                        )
 
                 except Exception as e:
 
@@ -598,11 +335,11 @@ def main():
                     )
 
             st.session_state[
-                "final_crop"
-            ] = final_crop
+                "query_crop"
+            ] = crop
 
     # =====================================================
-    # RIGHT PANEL
+    # RIGHT
     # =====================================================
 
     with right:
@@ -610,51 +347,32 @@ def main():
         if (
             uploaded
             and
-            "final_crop"
+            "query_crop"
             in st.session_state
         ):
 
-            final_crop = st.session_state[
-                "final_crop"
+            crop = st.session_state[
+                "query_crop"
             ]
-
-            st.markdown(
-                '<div class="section-label">'
-                'RETRIEVAL RESULTS'
-                '</div>',
-                unsafe_allow_html=True
-            )
 
             t0 = time.time()
 
-            candidates = retrieve(
-                final_crop,
+            results = retrieve(
+                crop,
                 model,
                 index,
                 device,
                 args.top_k,
-                search_region,
             )
 
             latency = (
                 time.time() - t0
             ) * 1000
 
-            m1, m2, m3 = st.columns(3)
-
-            m1.metric(
-                "Results",
-                len(candidates)
-            )
-
-            m2.metric(
-                "Index size",
-                f"{len(index):,}"
-            )
-
-            m3.metric(
-                "Latency",
-                f"{latency:.0f} ms"
+            st.success(
+                f"Retrieved "
+                f"{len(results)} results "
+                f"in {latency:.0f} ms"
             )
 
             st.markdown("---")
@@ -665,11 +383,11 @@ def main():
 
             rows = [
 
-                candidates[i:i+3]
+                results[i:i+3]
 
                 for i in range(
                     0,
-                    len(candidates),
+                    len(results),
                     3
                 )
             ]
@@ -678,16 +396,14 @@ def main():
 
                 cols = st.columns(3)
 
-                for col, cand in zip(cols, row):
+                for col, r in zip(cols, row):
 
                     with col:
 
                         img_path = (
                             dataset_root
-                            /
-                            "img"
-                            /
-                            cand["img_path"]
+                            / "img"
+                            / r["img_path"]
                         )
 
                         try:
@@ -708,17 +424,14 @@ def main():
                             )
 
                         st.markdown(
-
                             f"""
-                            **Similarity:** 
-                            {cand['final_score']:.3f}
+                            **Score:** {r['score']:.4f}
 
-                            **Item:**  
-                            {cand['item_id']}
+                            **Item ID:** {r['item_id']}
                             """
                         )
 
-                        caption = cand.get(
+                        caption = r.get(
                             "caption",
                             ""
                         )
