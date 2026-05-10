@@ -180,20 +180,13 @@ def build_multi_crop_embeddings(
     full_batch = []
     center_batch = []
     upper_batch = []
-    flip_batch = []
-
-    # -----------------------------------------------------
-    # create crops
-    # -----------------------------------------------------
 
     for img in images:
 
         w, h = img.size
 
-        # full image
         full = img
 
-        # center crop
         center = img.crop((
             int(0.15 * w),
             int(0.15 * h),
@@ -201,7 +194,6 @@ def build_multi_crop_embeddings(
             int(0.85 * h)
         ))
 
-        # upper-body crop
         upper = img.crop((
             0,
             0,
@@ -209,12 +201,6 @@ def build_multi_crop_embeddings(
             int(0.7 * h)
         ))
 
-        # horizontal flip
-        flip = full.transpose(
-            Image.FLIP_LEFT_RIGHT
-        )
-
-        # transforms
         full_batch.append(
             transform(full)
         )
@@ -227,14 +213,6 @@ def build_multi_crop_embeddings(
             transform(upper)
         )
 
-        flip_batch.append(
-            transform(flip)
-        )
-
-    # -----------------------------------------------------
-    # stack
-    # -----------------------------------------------------
-
     full_batch = torch.stack(
         full_batch
     ).to(device)
@@ -246,14 +224,6 @@ def build_multi_crop_embeddings(
     upper_batch = torch.stack(
         upper_batch
     ).to(device)
-
-    flip_batch = torch.stack(
-        flip_batch
-    ).to(device)
-
-    # -----------------------------------------------------
-    # embeddings
-    # -----------------------------------------------------
 
     with torch.no_grad():
 
@@ -269,24 +239,11 @@ def build_multi_crop_embeddings(
             upper_batch
         )
 
-        e4 = model.encode_image(
-            flip_batch
-        )
-
-    # -----------------------------------------------------
-    # weighted fusion
-    # -----------------------------------------------------
-
     emb = (
-        0.45 * e1 +
-        0.25 * e2 +
-        0.15 * e3 +
-        0.15 * e4
+        0.5 * e1 +
+        0.3 * e2 +
+        0.2 * e3
     )
-
-    # -----------------------------------------------------
-    # normalize
-    # -----------------------------------------------------
 
     emb = torch.nn.functional.normalize(
         emb,
@@ -294,7 +251,6 @@ def build_multi_crop_embeddings(
     )
 
     return emb
-
 
 # =========================================================
 # MAIN
