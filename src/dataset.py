@@ -1,12 +1,12 @@
 """
 Improved DeepFashion In-Shop Dataset
 
-Enhancements:
-- robust bbox handling
-- category-aware metadata
-- hard-negative triplet sampling
-- improved augmentation
+Upgrades:
 - safer image loading
+- GT bbox support
+- stronger augmentations
+- hard-negative stability
+- ViT-L compatible preprocessing
 """
 
 import random
@@ -16,6 +16,7 @@ from pathlib import Path
 from PIL import Image
 
 import torch
+
 from torch.utils.data import (
     Dataset,
     DataLoader,
@@ -52,6 +53,7 @@ def parse_eval_partition(partition_file: str):
         img_path = parts[0]
 
         if img_path.startswith("img/"):
+
             img_path = img_path[4:]
 
         item_id = parts[1]
@@ -61,6 +63,7 @@ def parse_eval_partition(partition_file: str):
         img_to_item[img_path] = item_id
 
         if split in splits:
+
             splits[split].append(img_path)
 
     return splits, img_to_item
@@ -84,6 +87,7 @@ def parse_bboxes(bbox_file: str):
         img_path = parts[0]
 
         if img_path.startswith("img/"):
+
             img_path = img_path[4:]
 
         try:
@@ -101,13 +105,14 @@ def parse_bboxes(bbox_file: str):
             )
 
         except Exception:
+
             continue
 
     return img_to_bbox
 
 
 # =========================================================
-# CATEGORY PARSER
+# CATEGORY
 # =========================================================
 
 def infer_category(rel_path: str):
@@ -119,8 +124,9 @@ def infer_category(rel_path: str):
         "shirt",
         "top",
         "blouse",
-        "tank"
+        "tank",
     ]):
+
         return "top"
 
     if any(k in p for k in [
@@ -128,11 +134,13 @@ def infer_category(rel_path: str):
         "short",
         "jean",
         "legging",
-        "skirt"
+        "skirt",
     ]):
+
         return "bottom"
 
     if "dress" in p:
+
         return "dress"
 
     return "unknown"
@@ -145,7 +153,7 @@ def infer_category(rel_path: str):
 def bbox_crop(
     image,
     bbox,
-    pad=0.05
+    pad=0.08
 ):
 
     x1, y1, x2, y2 = bbox
@@ -162,9 +170,15 @@ def bbox_crop(
     y2 = min(h, y2 + py)
 
     if x2 <= x1 or y2 <= y1:
+
         return image
 
-    return image.crop((x1, y1, x2, y2))
+    return image.crop((
+        x1,
+        y1,
+        x2,
+        y2
+    ))
 
 
 # =========================================================
@@ -196,7 +210,9 @@ class DeepFashionDataset(Dataset):
         self.use_gt_bbox = use_gt_bbox
 
         self.img_to_category = {
+
             p: infer_category(p)
+
             for p in image_paths
         }
 
@@ -208,13 +224,15 @@ class DeepFashionDataset(Dataset):
         )
 
         self.item_to_label = {
+
             item_id: idx
+
             for idx, item_id
             in enumerate(self.item_ids)
         }
 
     # =====================================================
-    # IMAGE LOADING
+    # LOAD IMAGE
     # =====================================================
 
     def _load_image(
@@ -222,7 +240,10 @@ class DeepFashionDataset(Dataset):
         rel_path
     ):
 
-        full_path = self.img_root / rel_path
+        full_path = (
+            self.img_root /
+            rel_path
+        )
 
         try:
 
@@ -232,17 +253,16 @@ class DeepFashionDataset(Dataset):
 
         except Exception:
 
-            image = Image.new(
+            return Image.new(
                 "RGB",
                 (224, 224),
                 color=(255, 255, 255)
             )
 
-            return image
-
         if (
             self.use_gt_bbox
-            and rel_path in self.img_to_bbox
+            and
+            rel_path in self.img_to_bbox
         ):
 
             try:
@@ -253,6 +273,7 @@ class DeepFashionDataset(Dataset):
                 )
 
             except Exception:
+
                 pass
 
         return image
@@ -282,13 +303,21 @@ class DeepFashionDataset(Dataset):
 
         if self.transform:
 
-            image = self.transform(image)
+            image = self.transform(
+                image
+            )
 
-        item_id = self.img_to_item[rel_path]
+        item_id = self.img_to_item[
+            rel_path
+        ]
 
-        label = self.item_to_label[item_id]
+        label = self.item_to_label[
+            item_id
+        ]
 
-        category = self.img_to_category[rel_path]
+        category = self.img_to_category[
+            rel_path
+        ]
 
         return (
             image,
@@ -304,13 +333,6 @@ class DeepFashionDataset(Dataset):
 # =========================================================
 
 class HardNegTripletDataset(Dataset):
-
-    """
-    Returns:
-        anchor,
-        positive,
-        hard_negative
-    """
 
     def __init__(
         self,
@@ -357,20 +379,38 @@ class HardNegTripletDataset(Dataset):
 
         p = self.img_root / name
 
-        image = Image.open(
-            p
-        ).convert("RGB")
+        try:
+
+            image = Image.open(
+                p
+            ).convert("RGB")
+
+        except Exception:
+
+            image = Image.new(
+                "RGB",
+                (224, 224),
+                color=(255, 255, 255)
+            )
 
         bbox = self.bbox_map.get(name)
 
         if bbox is not None:
 
-            image = bbox_crop(
-                image,
-                bbox
-            )
+            try:
 
-        return self.transform(image)
+                image = bbox_crop(
+                    image,
+                    bbox
+                )
+
+            except Exception:
+
+                pass
+
+        return self.transform(
+            image
+        )
 
     # =====================================================
     # LEN
@@ -411,29 +451,17 @@ class HardNegTripletDataset(Dataset):
 
             neg_name = anc_name
 
-        try:
+        anchor = self._load(
+            anc_name
+        )
 
-            anchor = self._load(
-                anc_name
-            )
+        positive = self._load(
+            pos_name
+        )
 
-            positive = self._load(
-                pos_name
-            )
-
-            negative = self._load(
-                neg_name
-            )
-
-        except Exception:
-
-            anchor = self._load(
-                anc_name
-            )
-
-            positive = anchor
-
-            negative = anchor
+        negative = self._load(
+            neg_name
+        )
 
         return (
             anchor,
@@ -469,16 +497,23 @@ def get_clip_transform(
 
             transforms.RandomResizedCrop(
                 image_size,
-                scale=(0.7, 1.0)
+                scale=(0.65, 1.0)
             ),
 
-            transforms.RandomHorizontalFlip(),
+            transforms.RandomHorizontalFlip(
+                p=0.5
+            ),
 
             transforms.ColorJitter(
-                brightness=0.2,
-                contrast=0.2,
-                saturation=0.15,
-                hue=0.02,
+                brightness=0.25,
+                contrast=0.25,
+                saturation=0.2,
+                hue=0.03,
+            ),
+
+            transforms.RandomPerspective(
+                distortion_scale=0.15,
+                p=0.2,
             ),
 
             transforms.ToTensor(),
