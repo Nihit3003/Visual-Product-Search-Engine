@@ -1,5 +1,13 @@
 """
-Improved Offline Indexing Pipeline
+Final upgraded offline indexing pipeline.
+
+Consistent with:
+- ViT-L-14
+- 768-d embeddings
+- GT bbox support
+- multimodal fusion
+- upgraded HNSW
+- hard-negative fine-tuning
 """
 
 import argparse
@@ -9,7 +17,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import open_clip
 import torch
 import torch.nn.functional as F
 
@@ -79,7 +86,7 @@ def get_args():
     p.add_argument(
         "--batch_size",
         type=int,
-        default=64
+        default=48
     )
 
     p.add_argument(
@@ -90,7 +97,8 @@ def get_args():
 
     p.add_argument(
         "--use_gt_bbox",
-        action="store_true"
+        action="store_true",
+        default=True
     )
 
     p.add_argument(
@@ -101,14 +109,14 @@ def get_args():
     p.add_argument(
         "--unfreeze_last_n",
         type=int,
-        default=4
+        default=6
     )
 
     return p.parse_args()
 
 
 # =========================================================
-# SAFE IMAGE LOADER
+# SAFE LOAD
 # =========================================================
 
 def open_image_safe(path):
@@ -166,7 +174,7 @@ def load_model(
         )
 
         print(
-            f"[Indexing] Loaded checkpoint"
+            "[Indexing] Loaded checkpoint"
         )
 
     model.eval().to(device)
@@ -175,7 +183,7 @@ def load_model(
 
 
 # =========================================================
-# MULTI-CROP EMBEDDING
+# MULTI-CROP EMBEDDINGS
 # =========================================================
 
 @torch.no_grad()
@@ -276,6 +284,12 @@ def main():
         else "cpu"
     )
 
+    torch.backends.cuda.matmul.allow_tf32 = True
+
+    torch.set_float32_matmul_precision(
+        "high"
+    )
+
     print(
         f"[Indexing] Device: {device}"
     )
@@ -360,7 +374,7 @@ def main():
         except Exception as e:
 
             print(
-                f"[Indexing] BLIP disabled: {e}"
+                f"[Indexing] BLIP unavailable: {e}"
             )
 
     # -----------------------------------------------------
@@ -402,17 +416,16 @@ def main():
     # -----------------------------------------------------
 
     index = HNSWIndex(
-        dim=model.out_dim
+        dim=model.out_dim,
+        M=64,
+        ef_construction=400,
+        ef_search=320,
     )
 
     batch_imgs = []
     batch_items = []
     batch_paths = []
     batch_metadata = []
-
-    tokenizer = open_clip.get_tokenizer(
-        "ViT-B-16"
-    )
 
     # =====================================================
     # FLUSH
@@ -442,22 +455,21 @@ def main():
 
         for rel_path in batch_paths:
 
-            if rel_path in captions_map:
+            cap = captions_map.get(
+                rel_path,
+                ""
+            )
 
-                cap = captions_map[rel_path]
+            if isinstance(cap, dict):
 
-                if isinstance(cap, dict):
+                cap = cap.get(
+                    "caption",
+                    ""
+                )
 
-                    cap = cap.get(
-                        "caption",
-                        ""
-                    )
-
-                captions.append(cap)
-
-            else:
-
-                captions.append("")
+            captions.append(
+                cap
+            )
 
         # -------------------------------------------------
         # fallback BLIP generation
@@ -466,28 +478,26 @@ def main():
         if (
             captioner is not None
             and
-            sum(len(c) > 0 for c in captions)
-            < len(captions)
+            any(len(c.strip()) == 0 for c in captions)
         ):
 
             try:
 
                 generated = captioner.caption(
                     batch_imgs,
-                    batch_size=4
+                    batch_size=2
                 )
 
                 for i in range(len(captions)):
 
-                    if captions[i] == "":
+                    if len(captions[i].strip()) == 0:
 
                         captions[i] = generated[i]
 
             except Exception as e:
 
                 print(
-                    f"[Indexing] "
-                    f"Caption failure: {e}"
+                    f"[Indexing] Caption failure: {e}"
                 )
 
         # -------------------------------------------------
@@ -497,7 +507,7 @@ def main():
         if (
             args.condition in ("B", "C")
             and
-            len(captions) > 0
+            any(len(c.strip()) > 0 for c in captions)
         ):
 
             try:
@@ -526,8 +536,7 @@ def main():
             except Exception as e:
 
                 print(
-                    f"[Indexing] "
-                    f"Fusion failed: {e}"
+                    f"[Indexing] Fusion failed: {e}"
                 )
 
                 embs = img_embs
@@ -537,7 +546,7 @@ def main():
             embs = img_embs
 
         # -------------------------------------------------
-        # add
+        # add to index
         # -------------------------------------------------
 
         index.add(
@@ -667,11 +676,7 @@ def main():
         # flush
         # -------------------------------------------------
 
-        if (
-            len(batch_imgs)
-            >=
-            args.batch_size
-        ):
+        if len(batch_imgs) >= args.batch_size:
 
             flush_batch()
 
@@ -720,4 +725,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
