@@ -207,7 +207,7 @@ class DeepFashionDataset(Dataset):
             # corrupted image fallback
             image = Image.new(
                 "RGB",
-                (336, 336),
+                (224, 224),
                 color=(255, 255, 255)
             )
 
@@ -296,7 +296,7 @@ class DeepFashionDataset(Dataset):
 # =========================================================
 
 def get_clip_transform(
-    image_size=336,
+    image_size=224,
     augment=False
 ):
 
@@ -518,7 +518,7 @@ def build_dataloaders(
     dataset_root,
     batch_size=64,
     num_workers=4,
-    image_size=336,
+    image_size=224,
     use_gt_bbox=True,
 ):
 
