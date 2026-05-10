@@ -1,5 +1,6 @@
 """
-Hard-Negative CLIP Fine-Tuning Script
+Final Hard-Negative CLIP Fine-Tuning
+ViT-L-14 + 768d Retrieval
 """
 
 import argparse
@@ -11,17 +12,25 @@ from pathlib import Path
 import hnswlib
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from torch.cuda.amp import (
     GradScaler,
-    autocast
+    autocast,
 )
 
 from torch.optim import AdamW
+
+from torch.optim.lr_scheduler import (
+    CosineAnnealingLR
+)
+
 from torch.utils.data import DataLoader
+
 from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parent.parent
+
 sys.path.insert(0, str(ROOT))
 
 from src.dataset import (
@@ -29,6 +38,8 @@ from src.dataset import (
     parse_bboxes,
     get_clip_transform,
     HardNegTripletDataset,
+    DeepFashionDataset,
+    bbox_crop,
 )
 
 from src.model import (
@@ -61,19 +72,19 @@ def get_args():
     p.add_argument(
         "--epochs",
         type=int,
-        default=10
+        default=15
     )
 
     p.add_argument(
         "--batch_size",
         type=int,
-        default=32
+        default=48
     )
 
     p.add_argument(
         "--lr",
         type=float,
-        default=1e-5
+        default=2e-5
     )
 
     p.add_argument(
@@ -97,7 +108,7 @@ def get_args():
     p.add_argument(
         "--unfreeze_last_n",
         type=int,
-        default=4
+        default=6
     )
 
     p.add_argument(
@@ -115,13 +126,13 @@ def get_args():
     p.add_argument(
         "--triplet_margin",
         type=float,
-        default=0.3
+        default=0.25
     )
 
     p.add_argument(
         "--triplet_weight",
         type=float,
-        default=0.5
+        default=0.35
     )
 
     p.add_argument(
@@ -153,6 +164,47 @@ def set_seed(seed):
 
     torch.cuda.manual_seed_all(seed)
 
+    torch.backends.cudnn.deterministic = True
+
+    torch.backends.cudnn.benchmark = False
+
+
+# =========================================================
+# MULTI-CROP EMBEDDINGS
+# =========================================================
+
+@torch.no_grad()
+def encode_multicrop(
+    model,
+    imgs
+):
+
+    e1 = model.encode_image(
+        imgs
+    )
+
+    flipped = torch.flip(
+        imgs,
+        dims=[3]
+    )
+
+    e2 = model.encode_image(
+        flipped
+    )
+
+    emb = (
+        0.7 * e1
+        +
+        0.3 * e2
+    )
+
+    emb = F.normalize(
+        emb,
+        dim=-1
+    )
+
+    return emb
+
 
 # =========================================================
 # EMBED ROWS
@@ -166,14 +218,18 @@ def embed_rows(
     img_root,
     bbox_map,
     device,
-    batch_size=128,
+    batch_size=96,
 ):
 
     model.eval()
 
     all_embs = []
+
     all_ids = []
+
     all_names = []
+
+    from PIL import Image
 
     for i in tqdm(
         range(0, len(rows), batch_size),
@@ -181,10 +237,14 @@ def embed_rows(
         leave=False
     ):
 
-        batch = rows[i:i + batch_size]
+        batch = rows[
+            i:i + batch_size
+        ]
 
         crops = []
+
         ids = []
+
         names = []
 
         for r in batch:
@@ -196,8 +256,6 @@ def embed_rows(
 
             try:
 
-                from PIL import Image
-
                 img = Image.open(
                     path
                 ).convert("RGB")
@@ -207,8 +265,6 @@ def embed_rows(
                 )
 
                 if bbox is not None:
-
-                    from src.dataset import bbox_crop
 
                     img = bbox_crop(
                         img,
@@ -228,18 +284,26 @@ def embed_rows(
                 )
 
             except Exception:
+
                 continue
 
         if not crops:
             continue
 
-        t = torch.stack(crops).to(device)
+        t = torch.stack(
+            crops
+        ).to(device)
 
-        emb = model.encode_image(t)
+        emb = encode_multicrop(
+            model,
+            t
+        )
 
         emb = emb.cpu().numpy()
 
-        all_embs.append(emb)
+        all_embs.append(
+            emb
+        )
 
         all_ids.extend(ids)
 
@@ -261,7 +325,7 @@ def build_hn_pool(
     ids,
     names,
     emb_dim,
-    pool_size=10,
+    pool_size=12,
 ):
 
     id_arr = np.array(ids)
@@ -273,8 +337,8 @@ def build_hn_pool(
 
     idx.init_index(
         max_elements=len(embs),
-        ef_construction=200,
-        M=32
+        ef_construction=400,
+        M=64
     )
 
     idx.add_items(
@@ -282,11 +346,11 @@ def build_hn_pool(
         list(range(len(embs)))
     )
 
-    idx.set_ef(100)
+    idx.set_ef(300)
 
     labels, _ = idx.knn_query(
         embs,
-        k=pool_size * 5 + 1
+        k=pool_size * 6 + 1
     )
 
     pool = {}
@@ -331,6 +395,7 @@ def quick_eval(
     model.eval()
 
     g_embs = []
+
     g_items = []
 
     for batch in gallery_loader:
@@ -339,17 +404,25 @@ def quick_eval(
 
         imgs = imgs.to(device)
 
-        emb = model.encode_image(imgs)
+        emb = encode_multicrop(
+            model,
+            imgs
+        )
 
         g_embs.append(
             emb.cpu().numpy()
         )
 
-        g_items.extend(item_ids)
+        g_items.extend(
+            item_ids
+        )
 
-    g_embs = np.concatenate(g_embs)
+    g_embs = np.concatenate(
+        g_embs
+    )
 
     q_embs = []
+
     q_items = []
 
     for batch in query_loader:
@@ -358,15 +431,22 @@ def quick_eval(
 
         imgs = imgs.to(device)
 
-        emb = model.encode_image(imgs)
+        emb = encode_multicrop(
+            model,
+            imgs
+        )
 
         q_embs.append(
             emb.cpu().numpy()
         )
 
-        q_items.extend(item_ids)
+        q_items.extend(
+            item_ids
+        )
 
-    q_embs = np.concatenate(q_embs)
+    q_embs = np.concatenate(
+        q_embs
+    )
 
     sims = q_embs @ g_embs.T
 
@@ -376,7 +456,9 @@ def quick_eval(
     )[:, :top_k]
 
     retrieved = [
+
         [g_items[i] for i in row]
+
         for row in top_idx
     ]
 
@@ -409,7 +491,15 @@ def train():
         else "cpu"
     )
 
-    root = Path(args.dataset_root)
+    torch.backends.cuda.matmul.allow_tf32 = True
+
+    torch.set_float32_matmul_precision(
+        "high"
+    )
+
+    root = Path(
+        args.dataset_root
+    )
 
     img_root = root / "img"
 
@@ -441,21 +531,33 @@ def train():
         augment=False
     )
 
-    # -----------------------------------------------------
-    # model
-    # -----------------------------------------------------
+    # =====================================================
+    # MODEL
+    # =====================================================
 
     model = VisualSearchModel(
+        clip_model_name="ViT-L-14",
+        pretrained="openai",
         alpha=args.alpha,
         unfreeze_last_n=args.unfreeze_last_n,
         embed_dim=args.embed_dim,
     ).to(device)
 
-    # -----------------------------------------------------
-    # initial HN pool
-    # -----------------------------------------------------
+    total, trainable = model.param_count()
 
-    print("\n[HN] Building initial pool...")
+    print(
+        f"\n[Model] "
+        f"{trainable/1e6:.2f}M "
+        f"trainable params"
+    )
+
+    # =====================================================
+    # HARD NEGATIVE POOL
+    # =====================================================
+
+    print(
+        "\n[HN] Building initial pool..."
+    )
 
     embs, ids, names = embed_rows(
         train_rows,
@@ -473,9 +575,9 @@ def train():
         emb_dim=args.embed_dim,
     )
 
-    # -----------------------------------------------------
-    # dataset
-    # -----------------------------------------------------
+    # =====================================================
+    # DATASETS
+    # =====================================================
 
     hn_dataset = HardNegTripletDataset(
         rows=train_rows,
@@ -493,12 +595,6 @@ def train():
         pin_memory=True,
         drop_last=True,
     )
-
-    # -----------------------------------------------------
-    # eval loaders
-    # -----------------------------------------------------
-
-    from src.dataset import DeepFashionDataset
 
     query_dataset = DeepFashionDataset(
         img_root,
@@ -520,21 +616,21 @@ def train():
 
     query_loader = DataLoader(
         query_dataset,
-        batch_size=128,
+        batch_size=96,
         shuffle=False,
         num_workers=4,
     )
 
     gallery_loader = DataLoader(
         gallery_dataset,
-        batch_size=128,
+        batch_size=96,
         shuffle=False,
         num_workers=4,
     )
 
-    # -----------------------------------------------------
-    # losses
-    # -----------------------------------------------------
+    # =====================================================
+    # LOSSES
+    # =====================================================
 
     supcon_loss = SupConLoss(
         temperature=args.temperature
@@ -544,14 +640,20 @@ def train():
         margin=args.triplet_margin
     )
 
-    # -----------------------------------------------------
-    # optimizer
-    # -----------------------------------------------------
+    # =====================================================
+    # OPTIMIZER
+    # =====================================================
 
     optimizer = AdamW(
         model.trainable_params(),
         lr=args.lr,
         weight_decay=args.weight_decay,
+    )
+
+    scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=args.epochs,
+        eta_min=1e-7,
     )
 
     scaler = GradScaler(
@@ -562,7 +664,9 @@ def train():
 
     history = []
 
-    out_dir = Path(args.output_dir)
+    out_dir = Path(
+        args.output_dir
+    )
 
     out_dir.mkdir(
         parents=True,
@@ -630,21 +734,26 @@ def train():
 
             negative = negative.to(device)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(
+                set_to_none=True
+            )
 
             with autocast(
                 enabled=(device == "cuda")
             ):
 
-                z_a = model.encode_image(
+                z_a = encode_multicrop(
+                    model,
                     anchor
                 )
 
-                z_p = model.encode_image(
+                z_p = encode_multicrop(
+                    model,
                     positive
                 )
 
-                z_n = model.encode_image(
+                z_n = encode_multicrop(
+                    model,
                     negative
                 )
 
@@ -701,8 +810,12 @@ def train():
             total_tri += loss_tri.item()
 
             pbar.set_postfix({
-                "loss": f"{loss.item():.4f}"
+
+                "loss":
+                    f"{loss.item():.4f}"
             })
+
+        scheduler.step()
 
         avg_loss = total_loss / len(train_loader)
 
@@ -717,9 +830,9 @@ def train():
             f"Triplet: {avg_tri:.4f}"
         )
 
-        # -------------------------------------------------
-        # eval
-        # -------------------------------------------------
+        # =================================================
+        # EVAL
+        # =================================================
 
         if (epoch + 1) % args.eval_every == 0:
 
@@ -736,11 +849,14 @@ def train():
 
             history.append({
 
-                "epoch": epoch + 1,
+                "epoch":
+                    epoch + 1,
 
-                "loss": avg_loss,
+                "loss":
+                    avg_loss,
 
-                "recall@10": r10,
+                "recall@10":
+                    r10,
             })
 
             if r10 > best_r10:
@@ -749,7 +865,8 @@ def train():
 
                 torch.save({
 
-                    "epoch": epoch,
+                    "epoch":
+                        epoch,
 
                     "model_state_dict":
                         model.state_dict(),
@@ -774,6 +891,10 @@ def train():
                     f"{best_r10:.4f}"
                 )
 
+    # =====================================================
+    # SAVE HISTORY
+    # =====================================================
+
     with open(
         out_dir / "train_history.json",
         "w"
@@ -787,9 +908,11 @@ def train():
 
     print(
         f"\nTraining done. "
-        f"Best Recall@10: {best_r10:.4f}"
+        f"Best Recall@10: "
+        f"{best_r10:.4f}"
     )
 
 
 if __name__ == "__main__":
+
     train()
