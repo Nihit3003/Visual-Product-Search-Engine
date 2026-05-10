@@ -387,11 +387,9 @@ def main():
         # captions
         # -------------------------------------------------
 
-        if (
-            captioner is not None
-            and
-            args.condition in ("B", "C")
-        ):
+        captioner = None
+
+        print("[Indexing] Captioner disabled")
 
             try:
 
