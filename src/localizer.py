@@ -1,12 +1,12 @@
 """
-Improved YOLO-based clothing localizer.
+High-quality YOLO clothing localizer.
 
-Enhancements:
-- tighter crops
-- upper-garment prioritization
-- confidence-aware fallback
+Optimized for:
+- retrieval accuracy
+- ViT-L embeddings
+- upper-garment focus
 - reduced background leakage
-- better retrieval-focused crops
+- region-aware retrieval
 """
 
 from __future__ import annotations
@@ -30,8 +30,25 @@ FASHION_COCO_IDS = {
     0,   # person
     27,  # backpack
     31,  # handbag
-    32   # tie
+    32,  # tie
 }
+
+
+# =========================================================
+# CUDA CHECK
+# =========================================================
+
+def _cuda_available():
+
+    try:
+
+        import torch
+
+        return torch.cuda.is_available()
+
+    except Exception:
+
+        return False
 
 
 # =========================================================
@@ -39,53 +56,73 @@ FASHION_COCO_IDS = {
 # =========================================================
 
 class YOLOLocalizer:
-    """
-    Improved clothing detector optimized for retrieval.
 
-    Key changes:
-    - tighter crops
+    """
+    Retrieval-oriented clothing localizer.
+
+    Key improvements:
+    - tighter retrieval crops
+    - upper-body prioritization
+    - multi-region outputs
+    - confidence-aware fallbacks
     - reduced lower-body dominance
-    - confidence-aware logic
-    - fallback stability
     """
 
     def __init__(
         self,
         weights: str = "yolov8n.pt",
-        conf_thresh: float = 0.25,
+        conf_thresh: float = 0.22,
         iou_thresh: float = 0.45,
         device: str = "",
-        padding_frac: float = 0.03,   # tighter padding
+        padding_frac: float = 0.025,
         upper_body_bias: bool = True,
     ):
 
         if not _HAS_ULTRALYTICS:
+
             raise ImportError(
                 "ultralytics not installed"
             )
 
         self.conf_thresh = conf_thresh
+
         self.iou_thresh = iou_thresh
+
         self.padding_frac = padding_frac
+
         self.upper_body_bias = upper_body_bias
 
-        print(f"[YOLO] Loading weights: {weights} ...")
+        print(
+            f"[YOLO] Loading: {weights}"
+        )
 
         self.model = _YOLO(weights)
 
         self.model.to(
-            device if device
-            else "cuda" if _cuda_available()
+
+            device
+
+            if device
+
+            else "cuda"
+
+            if _cuda_available()
+
             else "cpu"
         )
 
-        print("[YOLO] Localizer ready.")
+        print(
+            "[YOLO] Ready."
+        )
 
     # =====================================================
     # DETECT
     # =====================================================
 
-    def detect(self, image: Image.Image) -> dict:
+    def detect(
+        self,
+        image: Image.Image
+    ) -> dict:
 
         results = self.model(
             image,
@@ -97,66 +134,131 @@ class YOLOLocalizer:
         W, H = image.size
 
         best_box = None
+
         best_conf = 0.0
+
         best_cls = None
 
         # -------------------------------------------------
-        # Choose best detection
+        # detection selection
         # -------------------------------------------------
 
-        if results.boxes is not None and len(results.boxes) > 0:
+        if (
+            results.boxes is not None
+            and
+            len(results.boxes) > 0
+        ):
 
             boxes = results.boxes
 
-            for i, conf in enumerate(boxes.conf.tolist()):
+            for i, conf in enumerate(
+                boxes.conf.tolist()
+            ):
 
-                cls_id = int(boxes.cls[i].item())
+                cls_id = int(
+                    boxes.cls[i].item()
+                )
 
-                if conf > best_conf:
+                xyxy = (
+                    boxes.xyxy[i]
+                    .cpu()
+                    .numpy()
+                    .astype(int)
+                    .tolist()
+                )
 
-                    best_conf = conf
+                x1, y1, x2, y2 = xyxy
 
-                    best_box = (
-                        boxes.xyxy[i]
-                        .cpu()
-                        .numpy()
-                        .astype(int)
-                        .tolist()
-                    )
+                area = max(
+                    (x2 - x1) * (y2 - y1),
+                    1
+                )
 
-                    best_cls = results.names[cls_id]
+                center_y = (
+                    y1 + y2
+                ) / 2
+
+                # -------------------------------------------------
+                # retrieval-aware scoring
+                # -------------------------------------------------
+
+                score = conf
+
+                # prefer larger torso-focused regions
+
+                score += (
+                    area / (W * H)
+                ) * 0.15
+
+                # avoid tiny detections
+
+                if area < 0.02 * (W * H):
+
+                    score -= 0.2
+
+                # slightly prefer upper-centered crops
+
+                score += (
+                    1.0 - center_y / H
+                ) * 0.05
+
+                if score > best_conf:
+
+                    best_conf = score
+
+                    best_box = xyxy
+
+                    best_cls = results.names[
+                        cls_id
+                    ]
 
         # -------------------------------------------------
-        # No detection fallback
+        # fallback
         # -------------------------------------------------
 
         if best_box is None:
 
             return {
-                "box": None,
-                "confidence": None,
-                "class_name": None,
-        
-                "cropped": image,
-        
-                "full": image,
-                "upper": image,
-                "lower": image,
+
+                "box":
+                    None,
+
+                "confidence":
+                    None,
+
+                "class_name":
+                    None,
+
+                "cropped":
+                    image,
+
+                "full":
+                    image,
+
+                "upper":
+                    image,
+
+                "lower":
+                    image,
             }
 
         # -------------------------------------------------
-        # Tight crop refinement
+        # refine crop
         # -------------------------------------------------
 
         x1, y1, x2, y2 = best_box
 
         bw = x2 - x1
+
         bh = y2 - y1
 
-        # tighter padding
+        pad_w = int(
+            bw * self.padding_frac
+        )
 
-        pad_w = int(bw * self.padding_frac)
-        pad_h = int(bh * self.padding_frac)
+        pad_h = int(
+            bh * self.padding_frac
+        )
 
         x1 = max(0, x1 + pad_w)
         y1 = max(0, y1 + pad_h)
@@ -165,28 +267,31 @@ class YOLOLocalizer:
         y2 = min(H, y2 - pad_h)
 
         # -------------------------------------------------
-        # Upper-body prioritization
+        # upper-body prioritization
         # -------------------------------------------------
-
-        # Removes pants / legs / lower-body dominance
-        # for shirt-style retrieval.
 
         if self.upper_body_bias:
 
             refined_h = y2 - y1
+
             refined_w = x2 - x1
 
-            aspect_ratio = refined_h / max(refined_w, 1)
+            aspect_ratio = (
+                refined_h /
+                max(refined_w, 1)
+            )
 
-            # Tall crops usually contain torso + legs
-            # Keep upper ~65%
+            # tall person crops
+            # often include irrelevant legs
 
-            if aspect_ratio > 1.35:
+            if aspect_ratio > 1.25:
 
-                y2 = int(y1 + 0.65 * refined_h)
+                y2 = int(
+                    y1 + 0.68 * refined_h
+                )
 
         # -------------------------------------------------
-        # Clamp again
+        # safety clamp
         # -------------------------------------------------
 
         x1 = max(0, x1)
@@ -195,93 +300,117 @@ class YOLOLocalizer:
         x2 = min(W, x2)
         y2 = min(H, y2)
 
-        # -------------------------------------------------
-        # Safety checks
-        # -------------------------------------------------
-
         if x2 <= x1 or y2 <= y1:
-
-            cropped = image
 
             final_box = None
 
+            cropped = image
+
         else:
 
-            final_box = [x1, y1, x2, y2]
+            final_box = [
 
-            cropped = image.crop(final_box)
+                x1,
+                y1,
+                x2,
+                y2
+            ]
+
+            cropped = image.crop(
+                final_box
+            )
 
         # -------------------------------------------------
-        # Confidence-aware fallback
+        # region crops
         # -------------------------------------------------
-
-        # Low confidence:
-        # blend with full-image behavior later.
-
-       
- 
 
         if final_box is not None:
-        
+
             x1, y1, x2, y2 = final_box
-        
+
             h_box = y2 - y1
-        
-            # full outfit crop
+
             full_crop = image.crop((
                 x1,
                 y1,
                 x2,
                 y2
             ))
-        
-            # upper-body crop
+
             upper_crop = image.crop((
                 x1,
                 y1,
                 x2,
-                int(y1 + 0.55 * h_box)
+                int(y1 + 0.58 * h_box)
             ))
-        
-            # lower-body crop
+
             lower_crop = image.crop((
                 x1,
-                int(y1 + 0.45 * h_box),
+                int(y1 + 0.42 * h_box),
                 x2,
                 y2
             ))
-        
+
         else:
-        
+
             full_crop = image
+
             upper_crop = image
+
             lower_crop = image
-        
+
         # -------------------------------------------------
-        # final return
+        # low-confidence fallback blending
         # -------------------------------------------------
-        
+
+        confidence = float(best_conf)
+
+        if confidence < 0.28:
+
+            cropped = image
+
+        # -------------------------------------------------
+        # final
+        # -------------------------------------------------
+
         return {
-            "box": final_box,
-            "confidence": float(best_conf),
-            "class_name": best_cls,
-        
+
+            "box":
+                final_box,
+
+            "confidence":
+                confidence,
+
+            "class_name":
+                best_cls,
+
             # backward compatibility
-            "cropped": cropped,
-        
-            # region-aware retrieval
-            "full": full_crop,
-            "upper": upper_crop,
-            "lower": lower_crop,
+            "cropped":
+                cropped,
+
+            # region retrieval
+            "full":
+                full_crop,
+
+            "upper":
+                upper_crop,
+
+            "lower":
+                lower_crop,
         }
 
     # =====================================================
-    # SIMPLE CROP API
+    # SIMPLE API
     # =====================================================
 
-    def crop(self, image: Image.Image) -> Image.Image:
+    def crop(
+        self,
+        image: Image.Image
+    ):
 
-        return self.detect(image)["cropped"]
+        return self.detect(
+            image
+        )["cropped"]
 
     # =====================================================
     # BATCH
@@ -289,15 +418,21 @@ class YOLOLocalizer:
 
     def batch_detect(
         self,
-        images: list[Image.Image],
-        batch_size: int = 8,
-    ) -> list[dict]:
+        images,
+        batch_size=8,
+    ):
 
         outputs = []
 
-        for i in range(0, len(images), batch_size):
+        for i in range(
+            0,
+            len(images),
+            batch_size
+        ):
 
-            batch = images[i:i+batch_size]
+            batch = images[
+                i : i + batch_size
+            ]
 
             for img in batch:
 
@@ -314,12 +449,10 @@ class YOLOLocalizer:
     @staticmethod
     def crop_from_gt(
         image: Image.Image,
-        bbox: list[int]
-    ) -> Image.Image:
+        bbox
+    ):
 
         x1, y1, x2, y2 = bbox
-
-        # safety clamp
 
         x1 = max(0, x1)
         y1 = max(0, y1)
@@ -328,23 +461,12 @@ class YOLOLocalizer:
         y2 = min(image.height, y2)
 
         if x2 <= x1 or y2 <= y1:
+
             return image
 
-        return image.crop((x1, y1, x2, y2))
-
-
-# =========================================================
-# CUDA CHECK
-# =========================================================
-
-def _cuda_available() -> bool:
-
-    try:
-
-        import torch
-
-        return torch.cuda.is_available()
-
-    except ImportError:
-
-        return False
+        return image.crop((
+            x1,
+            y1,
+            x2,
+            y2
+        ))
