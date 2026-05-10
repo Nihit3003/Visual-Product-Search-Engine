@@ -346,7 +346,7 @@ def main():
     # -----------------------------------------------------
 
     transform = get_clip_transform(
-        image_size=336,
+        image_size=224,
         augment=False
     )
 
