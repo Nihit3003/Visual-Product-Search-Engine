@@ -1,13 +1,5 @@
 """
 Improved Offline Indexing Pipeline
-
-Enhancements:
-- multi-crop embeddings
-- category-aware metadata
-- confidence-weighted fusion
-- stronger normalization
-- safer image handling
-- improved retrieval quality
 """
 
 import argparse
@@ -17,7 +9,10 @@ import time
 from pathlib import Path
 
 import numpy as np
+import open_clip
 import torch
+import torch.nn.functional as F
+
 from PIL import Image
 from tqdm import tqdm
 
@@ -29,11 +24,15 @@ from src.dataset import (
     parse_bboxes,
     get_clip_transform,
     infer_category,
+    bbox_crop,
 )
 
 from src.model import VisualSearchModel
+
 from src.blip_module import FashionCaptioner
+
 from src.localizer import YOLOLocalizer
+
 from src.index import HNSWIndex
 
 
@@ -69,7 +68,7 @@ def get_args():
     p.add_argument(
         "--alpha",
         type=float,
-        default=0.6
+        default=0.7
     )
 
     p.add_argument(
@@ -86,8 +85,7 @@ def get_args():
 
     p.add_argument(
         "--use_gt_bbox",
-        action="store_true",
-        default=True
+        action="store_true"
     )
 
     p.add_argument(
@@ -105,10 +103,30 @@ def get_args():
 
 
 # =========================================================
+# SAFE IMAGE LOADER
+# =========================================================
+
+def open_image_safe(path):
+
+    try:
+
+        return Image.open(
+            path
+        ).convert("RGB")
+
+    except Exception:
+
+        return None
+
+
+# =========================================================
 # MODEL
 # =========================================================
 
-def load_model(args, device):
+def load_model(
+    args,
+    device
+):
 
     alpha = (
         1.0
@@ -128,22 +146,22 @@ def load_model(args, device):
         args.condition == "C"
     ):
 
-        state = torch.load(
+        ckpt = torch.load(
             args.ckpt_path,
             map_location=device
         )
 
-        if "model_state_dict" in state:
-            state = state["model_state_dict"]
+        if "model_state_dict" in ckpt:
+
+            ckpt = ckpt["model_state_dict"]
 
         model.load_state_dict(
-            state,
+            ckpt,
             strict=False
         )
 
         print(
-            f"[Indexing] Loaded checkpoint: "
-            f"{args.ckpt_path}"
+            f"[Indexing] Loaded checkpoint"
         )
 
     model.eval().to(device)
@@ -152,24 +170,10 @@ def load_model(args, device):
 
 
 # =========================================================
-# IMAGE LOADER
-# =========================================================
-
-def open_image_safe(path):
-
-    try:
-
-        return Image.open(path).convert("RGB")
-
-    except Exception:
-
-        return None
-
-
-# =========================================================
 # MULTI-CROP EMBEDDING
 # =========================================================
 
+@torch.no_grad()
 def build_multi_crop_embeddings(
     images,
     model,
@@ -225,32 +229,33 @@ def build_multi_crop_embeddings(
         upper_batch
     ).to(device)
 
-    with torch.no_grad():
+    e1 = model.encode_image(
+        full_batch
+    )
 
-        e1 = model.encode_image(
-            full_batch
-        )
+    e2 = model.encode_image(
+        center_batch
+    )
 
-        e2 = model.encode_image(
-            center_batch
-        )
-
-        e3 = model.encode_image(
-            upper_batch
-        )
+    e3 = model.encode_image(
+        upper_batch
+    )
 
     emb = (
-        0.5 * e1 +
-        0.3 * e2 +
+        0.5 * e1
+        +
+        0.3 * e2
+        +
         0.2 * e3
     )
 
-    emb = torch.nn.functional.normalize(
+    emb = F.normalize(
         emb,
         dim=-1
     )
 
     return emb
+
 
 # =========================================================
 # MAIN
@@ -266,7 +271,9 @@ def main():
         else "cpu"
     )
 
-    print(f"[Indexing] Device: {device}")
+    print(
+        f"[Indexing] Device: {device}"
+    )
 
     root = Path(args.dataset_root)
 
@@ -275,11 +282,11 @@ def main():
     # -----------------------------------------------------
 
     splits, img_to_item = parse_eval_partition(
-        str(root / "list_eval_partition.txt")
+        root / "list_eval_partition.txt"
     )
 
     img_to_bbox = parse_bboxes(
-        str(root / "list_bbox_inshop.txt")
+        root / "list_bbox_inshop.txt"
     )
 
     gallery_paths = splits["gallery"]
@@ -290,7 +297,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # models
+    # model
     # -----------------------------------------------------
 
     model = load_model(
@@ -301,10 +308,14 @@ def main():
     total, trainable = model.param_count()
 
     print(
-        f"[Indexing] Params: "
-        f"{total/1e6:.1f}M total | "
-        f"{trainable/1e6:.2f}M trainable"
+        f"[Indexing] "
+        f"{trainable/1e6:.2f}M "
+        f"trainable params"
     )
+
+    # -----------------------------------------------------
+    # captioner
+    # -----------------------------------------------------
 
     captioner = None
 
@@ -316,30 +327,40 @@ def main():
                 device=device
             )
 
+            print(
+                "[Indexing] BLIP enabled"
+            )
+
         except Exception as e:
 
             print(
-                f"[Indexing] Captioner disabled: {e}"
+                f"[Indexing] BLIP disabled: {e}"
             )
 
     # -----------------------------------------------------
-    # YOLO
+    # yolo
     # -----------------------------------------------------
 
-    try:
+    localizer = None
 
-        localizer = YOLOLocalizer(
-            weights=args.yolo_weights,
-            device=device,
-        )
+    if not args.use_gt_bbox:
 
-    except Exception as e:
+        try:
 
-        print(
-            f"[Indexing] YOLO unavailable: {e}"
-        )
+            localizer = YOLOLocalizer(
+                weights=args.yolo_weights,
+                device=device,
+            )
 
-        localizer = None
+            print(
+                "[Indexing] YOLO enabled"
+            )
+
+        except Exception as e:
+
+            print(
+                f"[Indexing] YOLO unavailable: {e}"
+            )
 
     # -----------------------------------------------------
     # transform
@@ -363,6 +384,10 @@ def main():
     batch_paths = []
     batch_metadata = []
 
+    tokenizer = open_clip.get_tokenizer(
+        "ViT-B-16"
+    )
+
     # =====================================================
     # FLUSH
     # =====================================================
@@ -371,104 +396,90 @@ def main():
 
         if not batch_imgs:
             return
-    
+
         # -------------------------------------------------
         # image embeddings
         # -------------------------------------------------
-    
-        embs = build_multi_crop_embeddings(
+
+        img_embs = build_multi_crop_embeddings(
             batch_imgs,
             model,
             transform,
             device,
         )
-    
+
+        captions = [""] * len(batch_imgs)
+
         # -------------------------------------------------
-        # BLIP captions
+        # captions
         # -------------------------------------------------
-    
+
         if captioner is not None:
-    
+
             try:
-    
+
                 captions = captioner.caption(
                     batch_imgs,
                     batch_size=4
                 )
-    
+
             except Exception as e:
-    
+
                 print(
-                    f"[Indexing] Caption generation failed: {e}"
+                    f"[Indexing] "
+                    f"Caption failure: {e}"
                 )
-    
-                captions = [""] * len(batch_imgs)
-    
-        else:
-    
-            captions = [""] * len(batch_imgs)
-    
+
         # -------------------------------------------------
         # multimodal fusion
         # -------------------------------------------------
-    
+
         if (
             args.condition in ("B", "C")
             and
             captioner is not None
         ):
-    
+
             try:
-    
-                import open_clip
-    
-                tokenizer = open_clip.get_tokenizer(
-                    "ViT-B-16"
-                )
-    
-                text_tokens = tokenizer(
+
+                text_embs = model.encode_text(
                     captions
-                ).to(device)
-    
-                with torch.no_grad():
-    
-                    text_embs = model.encode_text(
-                        text_tokens
-                    )
-    
-                text_embs = (
-                    torch.nn.functional.normalize(
-                        text_embs,
-                        dim=-1
-                    )
                 )
-    
-                # -----------------------------------------
-                # image-text fusion
-                # -----------------------------------------
-    
+
+                text_embs = F.normalize(
+                    text_embs,
+                    dim=-1
+                )
+
                 embs = (
-                    args.alpha * embs +
-                    (1.0 - args.alpha) * text_embs
+                    args.alpha * img_embs
+                    +
+                    (1.0 - args.alpha)
+                    * text_embs
                 )
-    
-                embs = (
-                    torch.nn.functional.normalize(
-                        embs,
-                        dim=-1
-                    )
+
+                embs = F.normalize(
+                    embs,
+                    dim=-1
                 )
-    
+
             except Exception as e:
-    
+
                 print(
-                    f"[Indexing] Text fusion failed: {e}"
+                    f"[Indexing] "
+                    f"Fusion failed: {e}"
                 )
-    
+
+                embs = img_embs
+
+        else:
+
+            embs = img_embs
+
         # -------------------------------------------------
-        # add to index
+        # add
         # -------------------------------------------------
-    
+
         index.add(
             embeddings=embs.detach().cpu().numpy(),
             item_ids=batch_items[:],
@@ -476,7 +487,7 @@ def main():
             captions=captions,
             metadata=batch_metadata[:],
         )
-    
+
         batch_imgs.clear()
         batch_items.clear()
         batch_paths.clear()
@@ -499,7 +510,9 @@ def main():
             rel_path
         )
 
-        img = open_image_safe(full_path)
+        img = open_image_safe(
+            full_path
+        )
 
         if img is None:
             continue
@@ -510,34 +523,37 @@ def main():
 
         conf = 1.0
 
-        if localizer is not None:
-
-            try:
-
-                result = localizer.detect(img)
-
-                crop = result["cropped"]
-
-                conf = (
-                    result["confidence"]
-                    if result["confidence"] is not None
-                    else 0.5
-                )
-
-            except Exception:
-
-                crop = img
-
-        elif (
+        if (
             args.use_gt_bbox
             and
             rel_path in img_to_bbox
         ):
 
-            crop = YOLOLocalizer.crop_from_gt(
+            crop = bbox_crop(
                 img,
                 img_to_bbox[rel_path]
             )
+
+        elif localizer is not None:
+
+            try:
+
+                result = localizer.detect(
+                    img
+                )
+
+                crop = result["cropped"]
+
+                conf = float(
+                    result.get(
+                        "confidence",
+                        0.5
+                    )
+                )
+
+            except Exception:
+
+                crop = img
 
         else:
 
@@ -547,18 +563,27 @@ def main():
         # metadata
         # -------------------------------------------------
 
-        category = infer_category(rel_path)
+        category = infer_category(
+            rel_path
+        )
 
         meta = {
-            "category": category,
-            "yolo_confidence": float(conf),
-            "localization_quality": (
+
+            "category":
+                category,
+
+            "yolo_confidence":
+                conf,
+
+            "localization_quality":
+
                 "high"
-                if conf > 0.75
-                else "medium"
-                if conf > 0.4
-                else "low"
-            ),
+                if conf > 0.75 else
+
+                "medium"
+                if conf > 0.4 else
+
+                "low",
         }
 
         batch_imgs.append(crop)
@@ -570,15 +595,23 @@ def main():
             )
         )
 
-        batch_paths.append(rel_path)
+        batch_paths.append(
+            rel_path
+        )
 
-        batch_metadata.append(meta)
+        batch_metadata.append(
+            meta
+        )
 
         # -------------------------------------------------
         # flush
         # -------------------------------------------------
 
-        if len(batch_imgs) >= args.batch_size:
+        if (
+            len(batch_imgs)
+            >=
+            args.batch_size
+        ):
 
             flush_batch()
 
@@ -602,7 +635,9 @@ def main():
         f"condition_{args.condition}_alpha{args.alpha}"
     )
 
-    index.save(str(save_path))
+    index.save(
+        str(save_path)
+    )
 
     print(
         f"[Indexing] Saved → {save_path}"
