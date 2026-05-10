@@ -1,13 +1,15 @@
+# Updated src/model.py
+
 """
 Improved CLIP-based visual retrieval model.
 
-Enhancements:
-- stronger SupCon
-- hard-negative triplet loss
-- projection MLP
-- temperature scaling
+Upgrades:
+- ViT-L-14 backbone
+- native 768-d embeddings
+- stronger projection head
+- hard-negative training support
 - improved normalization
-- retrieval robustness
+- stable multimodal fusion
 """
 
 import torch
@@ -21,10 +23,6 @@ import open_clip
 # =========================================================
 
 class SupConLoss(nn.Module):
-
-    """
-    Supervised Contrastive Loss
-    """
 
     def __init__(
         self,
@@ -107,14 +105,10 @@ class SupConLoss(nn.Module):
 
 
 # =========================================================
-# HARD NEGATIVE TRIPLET LOSS
+# TRIPLET LOSS
 # =========================================================
 
 class TripletLoss(nn.Module):
-
-    """
-    Hard-negative triplet margin loss
-    """
 
     def __init__(
         self,
@@ -163,17 +157,17 @@ class TripletLoss(nn.Module):
 
 class VisualSearchModel(nn.Module):
 
-    CLIP_MODEL = "ViT-B-16"
+    CLIP_MODEL = "ViT-L-14"
 
     CLIP_PRETRAIN = "openai"
 
     def __init__(
         self,
-        clip_model_name="ViT-B-16",
+        clip_model_name="ViT-L-14",
         pretrained="openai",
         alpha=0.7,
-        unfreeze_last_n=4,
-        embed_dim=256,
+        unfreeze_last_n=6,
+        embed_dim=768,
     ):
 
         super().__init__()
@@ -181,7 +175,7 @@ class VisualSearchModel(nn.Module):
         self.alpha = alpha
 
         # -------------------------------------------------
-        # load CLIP
+        # LOAD CLIP
         # -------------------------------------------------
 
         model, _, _ = open_clip.create_model_and_transforms(
@@ -200,13 +194,13 @@ class VisualSearchModel(nn.Module):
         )
 
         clip_dim = (
-            model.text_projection.shape[0]
+            model.text_projection.shape[1]
             if hasattr(model, "text_projection")
-            else 512
+            else 768
         )
 
         # -------------------------------------------------
-        # freeze all
+        # FREEZE ALL
         # -------------------------------------------------
 
         for p in model.parameters():
@@ -214,7 +208,7 @@ class VisualSearchModel(nn.Module):
             p.requires_grad_(False)
 
         # -------------------------------------------------
-        # selectively unfreeze visual blocks
+        # UNFREEZE LAST BLOCKS
         # -------------------------------------------------
 
         self._unfreeze_vision(
@@ -222,10 +216,12 @@ class VisualSearchModel(nn.Module):
         )
 
         # -------------------------------------------------
-        # projection head
+        # PROJECTION HEAD
         # -------------------------------------------------
 
         self.proj = nn.Sequential(
+
+            nn.LayerNorm(clip_dim),
 
             nn.Linear(
                 clip_dim,
@@ -240,8 +236,6 @@ class VisualSearchModel(nn.Module):
                 clip_dim,
                 embed_dim
             ),
-
-            nn.LayerNorm(embed_dim),
         )
 
         self.out_dim = embed_dim
@@ -304,7 +298,7 @@ class VisualSearchModel(nn.Module):
         return feat
 
     # =====================================================
-    # TEXT
+    # TEXT ENCODING
     # =====================================================
 
     def encode_text(
@@ -351,6 +345,16 @@ class VisualSearchModel(nn.Module):
                 img_emb,
                 dim=-1
             )
+
+        img_emb = F.normalize(
+            img_emb,
+            dim=-1
+        )
+
+        txt_emb = F.normalize(
+            txt_emb,
+            dim=-1
+        )
 
         fused = (
             self.alpha * img_emb
