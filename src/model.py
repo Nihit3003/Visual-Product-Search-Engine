@@ -191,7 +191,7 @@ class VisualSearchModel(nn.Module):
         )
 
         clip_dim = (
-            model.text_projection.shape[1]
+            model.text_projection.shape[0]
             if hasattr(model, "text_projection")
             else 512
         )
