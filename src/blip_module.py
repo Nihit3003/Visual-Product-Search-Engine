@@ -36,7 +36,7 @@ class FashionCaptioner:
 
     def __init__(
         self,
-        model_name: str = "Salesforce/blip2-opt-2.7b",
+        model_name: str = "Salesforce/blip2-flan-t5-xl",
         device: str = "cuda",
         use_fp16: bool = True,
     ):
