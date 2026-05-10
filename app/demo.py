@@ -122,7 +122,7 @@ def load_localizer(yolo_weights):
 def build_embedding(img, model, device):
 
     transform = get_clip_transform(
-        336,
+        224,
         augment=False
     )
 
