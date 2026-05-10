@@ -50,11 +50,9 @@ def parse_eval_partition(partition_file: str):
         if len(parts) < 3:
             continue
 
+        # IMPORTANT FIX:
+        # DO NOT STRIP "img/"
         img_path = parts[0]
-
-        if img_path.startswith("img/"):
-
-            img_path = img_path[4:]
 
         item_id = parts[1]
 
@@ -84,11 +82,9 @@ def parse_bboxes(bbox_file: str):
         if len(parts) < 7:
             continue
 
+        # IMPORTANT FIX:
+        # DO NOT STRIP "img/"
         img_path = parts[0]
-
-        if img_path.startswith("img/"):
-
-            img_path = img_path[4:]
 
         try:
 
@@ -231,10 +227,6 @@ class DeepFashionDataset(Dataset):
             in enumerate(self.item_ids)
         }
 
-    # =====================================================
-    # LOAD IMAGE
-    # =====================================================
-
     def _load_image(
         self,
         rel_path
@@ -278,17 +270,9 @@ class DeepFashionDataset(Dataset):
 
         return image
 
-    # =====================================================
-    # LEN
-    # =====================================================
-
     def __len__(self):
 
         return len(self.image_paths)
-
-    # =====================================================
-    # GET ITEM
-    # =====================================================
 
     def __getitem__(
         self,
@@ -368,10 +352,6 @@ class HardNegTripletDataset(Dataset):
             if len(imgs) >= 2
         ]
 
-    # =====================================================
-    # LOAD
-    # =====================================================
-
     def _load(
         self,
         name
@@ -412,17 +392,9 @@ class HardNegTripletDataset(Dataset):
             image
         )
 
-    # =====================================================
-    # LEN
-    # =====================================================
-
     def __len__(self):
 
         return len(self.items)
-
-    # =====================================================
-    # GET ITEM
-    # =====================================================
 
     def __getitem__(
         self,
