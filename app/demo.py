@@ -383,7 +383,8 @@ def main():
             # ==========================================
             # YOLO
             # ==========================================
-
+            confirm_crop = False
+            use_full = False
             if localizer is not None:
 
                 detection = localizer.detect(img)
@@ -460,6 +461,14 @@ def main():
                         width="stretch"
                     )
 
+                    confirm_crop = st.button(
+                        "Confirm Crop"
+                    )
+                    
+                    use_full = st.button(
+                        "Use Full Image Instead"
+                    )
+                    
                     st.success(f"Box: {[x1, y1, x2, y2]}")
 
                 else:
@@ -474,7 +483,13 @@ def main():
 
                 cropped = img
 
-            st.session_state["final_crop"] = cropped
+            if confirm_crop:
+
+                st.session_state["final_crop"] = cropped
+            
+            elif use_full:
+            
+                st.session_state["final_crop"] = img
 
     with right:
 
