@@ -1,26 +1,13 @@
 """
-CLIP-based cross-modal embedding model.
-
-Architecture:
-  - Vision encoder  : CLIP ViT (last-N blocks unfrozen for fine-tuning)
-  - Text  encoder  : CLIP text encoder (frozen)
-  - Fusion         : weighted sum  v = α·φ_V(x̂) + (1-α)·φ_T(c)
-  - Output         : L2-normalised 512-dim vector (ViT-B/32)
-
-Loss:
-  - Supervised Contrastive Loss (SupCon) — same item_id = positives
-"""
-
-"""
 Improved CLIP-based visual retrieval model.
 
 Enhancements:
 - stronger SupCon
-- multi-crop embeddings
+- hard-negative triplet loss
 - projection MLP
 - temperature scaling
 - improved normalization
-- better retrieval robustness
+- retrieval robustness
 """
 
 import torch
@@ -36,8 +23,7 @@ import open_clip
 class SupConLoss(nn.Module):
 
     """
-    Improved Supervised Contrastive Loss
-    with stronger hard-negative separation.
+    Supervised Contrastive Loss
     """
 
     def __init__(
@@ -59,18 +45,10 @@ class SupConLoss(nn.Module):
 
         N = features.shape[0]
 
-        # -------------------------------------------------
-        # normalize
-        # -------------------------------------------------
-
         features = F.normalize(
             features,
             dim=-1
         )
-
-        # -------------------------------------------------
-        # similarity matrix
-        # -------------------------------------------------
 
         sim = torch.matmul(
             features,
@@ -78,10 +56,6 @@ class SupConLoss(nn.Module):
         )
 
         sim = sim / self.temperature
-
-        # -------------------------------------------------
-        # masks
-        # -------------------------------------------------
 
         labels = labels.contiguous().view(-1, 1)
 
@@ -97,10 +71,6 @@ class SupConLoss(nn.Module):
 
         pos_mask = pos_mask - self_mask
 
-        # -------------------------------------------------
-        # numerical stability
-        # -------------------------------------------------
-
         sim_max, _ = torch.max(
             sim,
             dim=1,
@@ -109,29 +79,17 @@ class SupConLoss(nn.Module):
 
         sim = sim - sim_max.detach()
 
-        # -------------------------------------------------
-        # log prob
-        # -------------------------------------------------
-
         exp_sim = torch.exp(sim) * (1 - self_mask)
 
         log_prob = sim - torch.log(
             exp_sim.sum(dim=1, keepdim=True) + 1e-8
         )
 
-        # -------------------------------------------------
-        # mean positive log-likelihood
-        # -------------------------------------------------
-
         pos_count = pos_mask.sum(dim=1)
 
         mean_log_prob = (
             pos_mask * log_prob
         ).sum(dim=1) / (pos_count + 1e-8)
-
-        # -------------------------------------------------
-        # final loss
-        # -------------------------------------------------
 
         valid = pos_count > 0
 
@@ -146,6 +104,57 @@ class SupConLoss(nn.Module):
         loss = -mean_log_prob[valid].mean()
 
         return loss
+
+
+# =========================================================
+# HARD NEGATIVE TRIPLET LOSS
+# =========================================================
+
+class TripletLoss(nn.Module):
+
+    """
+    Hard-negative triplet margin loss
+    """
+
+    def __init__(
+        self,
+        margin=0.2
+    ):
+
+        super().__init__()
+
+        self.loss_fn = nn.TripletMarginLoss(
+            margin=margin,
+            p=2
+        )
+
+    def forward(
+        self,
+        anchor,
+        positive,
+        negative
+    ):
+
+        anchor = F.normalize(
+            anchor,
+            dim=-1
+        )
+
+        positive = F.normalize(
+            positive,
+            dim=-1
+        )
+
+        negative = F.normalize(
+            negative,
+            dim=-1
+        )
+
+        return self.loss_fn(
+            anchor,
+            positive,
+            negative
+        )
 
 
 # =========================================================
@@ -213,7 +222,7 @@ class VisualSearchModel(nn.Module):
         )
 
         # -------------------------------------------------
-        # improved projection head
+        # projection head
         # -------------------------------------------------
 
         self.proj = nn.Sequential(
@@ -273,7 +282,7 @@ class VisualSearchModel(nn.Module):
                 p.requires_grad_(True)
 
     # =====================================================
-    # MULTI-CROP ENCODING
+    # IMAGE ENCODING
     # =====================================================
 
     def encode_image(
@@ -281,17 +290,9 @@ class VisualSearchModel(nn.Module):
         pixel_values: torch.Tensor
     ):
 
-        """
-        Multi-crop aware encoding.
-
-        Training:
-            receives tensor batch
-
-        Inference:
-            can average crops externally
-        """
-
-        feat = self.visual(pixel_values)
+        feat = self.visual(
+            pixel_values
+        )
 
         feat = self.proj(feat)
 
