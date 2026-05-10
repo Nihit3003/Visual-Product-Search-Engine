@@ -224,7 +224,7 @@ class HNSWIndex:
             meta = self.metadata[idx]
 
             # -------------------------------------------------
-            region aware filtering
+            # region aware filtering
             # -------------------------------------------------
             
             if query_region == "upper":
