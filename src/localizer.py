@@ -136,8 +136,12 @@ class YOLOLocalizer:
                 "box": None,
                 "confidence": None,
                 "class_name": None,
+        
                 "cropped": image,
+        
                 "full": image,
+                "upper": image,
+                "lower": image,
             }
 
         # -------------------------------------------------
@@ -214,12 +218,61 @@ class YOLOLocalizer:
         # Low confidence:
         # blend with full-image behavior later.
 
+       
+ 
+
+        if final_box is not None:
+        
+            x1, y1, x2, y2 = final_box
+        
+            h_box = y2 - y1
+        
+            # full outfit crop
+            full_crop = image.crop((
+                x1,
+                y1,
+                x2,
+                y2
+            ))
+        
+            # upper-body crop
+            upper_crop = image.crop((
+                x1,
+                y1,
+                x2,
+                int(y1 + 0.55 * h_box)
+            ))
+        
+            # lower-body crop
+            lower_crop = image.crop((
+                x1,
+                int(y1 + 0.45 * h_box),
+                x2,
+                y2
+            ))
+        
+        else:
+        
+            full_crop = image
+            upper_crop = image
+            lower_crop = image
+        
+        # -------------------------------------------------
+        # final return
+        # -------------------------------------------------
+        
         return {
             "box": final_box,
             "confidence": float(best_conf),
             "class_name": best_cls,
+        
+            # backward compatibility
             "cropped": cropped,
-            "full": image,
+        
+            # region-aware retrieval
+            "full": full_crop,
+            "upper": upper_crop,
+            "lower": lower_crop,
         }
 
     # =====================================================
