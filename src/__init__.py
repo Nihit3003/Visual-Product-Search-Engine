@@ -1,6 +1,6 @@
 # Visual Product Search Engine — Source Package
 from .dataset     import build_dataloaders, get_clip_transform, \
-                         parse_eval_partition, parse_item_ids, parse_bboxes
+                         parse_eval_partition, parse_bboxes
 from .model       import VisualSearchModel, SupConLoss
 from .blip_module import FashionCaptioner, ITMReranker
 from .localizer   import YOLOLocalizer
