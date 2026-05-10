@@ -77,7 +77,7 @@ def load_model(ckpt_path, alpha, embed_dim):
     model = VisualSearchModel(
         alpha=alpha,
         embed_dim=embed_dim,
-        unfreeze_last_n=2
+        unfreeze_last_n=4
     )
 
     if ckpt_path and Path(ckpt_path).exists():
@@ -217,7 +217,7 @@ def retrieve(
     candidates = index.search(
         q_emb,
         top_k=50,
-        query_region=region_map[search_region],
+        query_region=region_map.get(search_region,None),
     )
 
     filtered = []
