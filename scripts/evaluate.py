@@ -95,7 +95,7 @@ def encode_queries(
     """
     Returns (embeddings array of shape (N, D), list of item_ids).
     """
-    transform   = get_clip_transform(224, augment=False)
+    transform   = get_clip_transform(336, augment=False)
     embs_list   = []
 
     for i in tqdm(range(0, len(image_paths), batch_size), desc="  Encoding queries"):
@@ -106,7 +106,7 @@ def encode_queries(
             try:
                 img = Image.open(full).convert("RGB")
             except Exception:
-                img = Image.new("RGB", (224, 224))
+                img = Image.new("RGB", (336, 336))
 
             # YOLO crop or GT bbox
             if localizer is not None:
