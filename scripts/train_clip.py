@@ -6,14 +6,11 @@ import argparse
 import json
 import random
 import sys
-import time
-from collections import defaultdict
 from pathlib import Path
 
 import hnswlib
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from torch.cuda.amp import (
     GradScaler,
@@ -88,7 +85,7 @@ def get_args():
     p.add_argument(
         "--embed_dim",
         type=int,
-        default=256
+        default=768
     )
 
     p.add_argument(
@@ -131,6 +128,12 @@ def get_args():
         "--num_workers",
         type=int,
         default=4
+    )
+
+    p.add_argument(
+        "--eval_every",
+        type=int,
+        default=1
     )
 
     return p.parse_args()
@@ -718,56 +721,58 @@ def train():
         # eval
         # -------------------------------------------------
 
-        res = quick_eval(
-            model,
-            query_loader,
-            gallery_loader,
-            device,
-        )
+        if (epoch + 1) % args.eval_every == 0:
 
-        r10 = res.recall[10][0]
-
-        print(res)
-
-        history.append({
-
-            "epoch": epoch + 1,
-
-            "loss": avg_loss,
-
-            "recall@10": r10,
-        })
-
-        if r10 > best_r10:
-
-            best_r10 = r10
-
-            torch.save({
-
-                "epoch": epoch,
-
-                "model_state_dict":
-                    model.state_dict(),
-
-                "optimizer_state_dict":
-                    optimizer.state_dict(),
-
-                "best_recall":
-                    best_r10,
-
-                "args":
-                    vars(args),
-
-            }, str(
-                out_dir /
-                "clip_finetuned_best.pt"
-            ))
-
-            print(
-                f"\n[Train] "
-                f"★ Best Recall@10: "
-                f"{best_r10:.4f}"
+            res = quick_eval(
+                model,
+                query_loader,
+                gallery_loader,
+                device,
             )
+
+            r10 = res.recall[10][0]
+
+            print(res)
+
+            history.append({
+
+                "epoch": epoch + 1,
+
+                "loss": avg_loss,
+
+                "recall@10": r10,
+            })
+
+            if r10 > best_r10:
+
+                best_r10 = r10
+
+                torch.save({
+
+                    "epoch": epoch,
+
+                    "model_state_dict":
+                        model.state_dict(),
+
+                    "optimizer_state_dict":
+                        optimizer.state_dict(),
+
+                    "best_recall":
+                        best_r10,
+
+                    "args":
+                        vars(args),
+
+                }, str(
+                    out_dir /
+                    "clip_finetuned_best.pt"
+                ))
+
+                print(
+                    f"\n[Train] "
+                    f"★ Best Recall@10: "
+                    f"{best_r10:.4f}"
+                )
 
     with open(
         out_dir / "train_history.json",
