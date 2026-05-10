@@ -122,7 +122,7 @@ def load_localizer(yolo_weights):
 def build_embedding(img, model, device):
 
     transform = get_clip_transform(
-        224,
+        336,
         augment=False
     )
 
@@ -160,7 +160,11 @@ def build_embedding(img, model, device):
 
             embs.append(emb)
 
-    final_emb = np.mean(embs, axis=0)
+    final_emb = (
+        0.5 * embs[0] +
+        0.3 * embs[1] +
+        0.2 * embs[2]
+    )
 
     final_emb = final_emb / np.linalg.norm(final_emb)
 
@@ -192,7 +196,8 @@ def retrieve(
     model,
     index,
     device,
-    top_k
+    top_k,
+    search_region,
 ):
 
     query_category = predict_category(query_img)
@@ -203,9 +208,16 @@ def retrieve(
         device
     )
 
+    region_map = {
+        "Upper Body": "upper",
+        "Lower Body": "lower",
+        "Full Outfit": None,
+    }
+    
     candidates = index.search(
         q_emb,
-        top_k=50
+        top_k=50,
+        query_region=region_map[search_region],
     )
 
     filtered = []
@@ -441,11 +453,6 @@ def main():
                         '<div class="section-label">DETECTED CROP</div>',
                         unsafe_allow_html=True
                     )
-            
-                    st.image(
-                        cropped,
-                        width=300
-                    )
 
                     st.image(
                         cropped,
@@ -487,7 +494,8 @@ def main():
                 model,
                 index,
                 device,
-                args.top_k
+                args.top_k,
+                search_region,
             )
 
             latency = (time.time() - t0) * 1000
