@@ -345,8 +345,17 @@ def main():
         )
 
         uploaded = st.file_uploader(
-            "",
-            type=["jpg", "jpeg", "png", "webp"]
+            "Upload an image",
+            type=["jpg", "jpeg", "png"]
+        )
+        
+        search_region = st.radio(
+            "Select clothing region",
+            [
+                "Upper Body",
+                "Lower Body",
+                "Full Outfit"
+            ]
         )
 
         if uploaded:
@@ -366,41 +375,76 @@ def main():
             if localizer is not None:
 
                 detection = localizer.detect(img)
-
-                cropped = detection["cropped"]
-
+            
                 conf = detection["confidence"]
-
+            
                 box = detection["box"]
-
+            
                 if box is not None:
-
+            
                     x1, y1, x2, y2 = box
-
-                    # tighter crop
-
+            
+                    # tighter crop padding
+            
                     pad_x = int(0.03 * (x2 - x1))
                     pad_y = int(0.03 * (y2 - y1))
-
+            
                     x1 = max(0, x1 + pad_x)
                     y1 = max(0, y1 + pad_y)
-
+            
                     x2 = min(img.width, x2 - pad_x)
                     y2 = min(img.height, y2 - pad_y)
-
-                    # reduce lower-body dominance
-
+            
                     h_box = y2 - y1
                     w_box = x2 - x1
-
-                    if h_box > 1.4 * w_box:
-                        y2 = int(y1 + 0.65 * h_box)
-
-                    cropped = img.crop((x1, y1, x2, y2))
-
+            
+                    # full outfit crop
+                    full_crop = img.crop((x1, y1, x2, y2))
+            
+                    # upper-body crop
+                    upper_crop = img.crop((
+                        x1,
+                        y1,
+                        x2,
+                        int(y1 + 0.55 * h_box)
+                    ))
+            
+                    # lower-body crop
+                    lower_crop = img.crop((
+                        x1,
+                        int(y1 + 0.45 * h_box),
+                        x2,
+                        y2
+                    ))
+            
+                    # -------------------------------------------------
+                    # user selection
+                    # -------------------------------------------------
+            
+                    if search_region == "Upper Body":
+            
+                        cropped = upper_crop
+            
+                    elif search_region == "Lower Body":
+            
+                        cropped = lower_crop
+            
+                    else:
+            
+                        cropped = full_crop
+            
+                    # -------------------------------------------------
+                    # visualization
+                    # -------------------------------------------------
+            
                     st.markdown(
                         '<div class="section-label">DETECTED CROP</div>',
                         unsafe_allow_html=True
+                    )
+            
+                    st.image(
+                        cropped,
+                        width=300
                     )
 
                     st.image(
