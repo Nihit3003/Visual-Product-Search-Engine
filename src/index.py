@@ -181,6 +181,7 @@ class HNSWIndex:
         top_k: int = 50,
         query_category: str | None = None,
         query_gender: str | None = None,
+        query_region: str | None = None,
         deduplicate_items: bool = True,
     ) -> list[dict]:
 
@@ -222,6 +223,34 @@ class HNSWIndex:
 
             meta = self.metadata[idx]
 
+            # -------------------------------------------------
+            region aware filtering
+            # -------------------------------------------------
+            
+            if query_region == "upper":
+            
+                if meta.get("category") not in [
+                    "top",
+                    "shirt",
+                    "upper",
+                    "hoodie",
+                    "jacket",
+                    "blouse",
+                ]:
+                    continue
+            
+            elif query_region == "lower":
+            
+                if meta.get("category") not in [
+                    "bottom",
+                    "pants",
+                    "shorts",
+                    "skirt",
+                    "jeans",
+                    "legging",
+                ]:
+                    continue
+            
             similarity = 1.0 - float(dist)
 
             rerank_score = similarity
