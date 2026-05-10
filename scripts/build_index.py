@@ -384,10 +384,29 @@ def main():
         )
 
         # -------------------------------------------------
-        # captions disabled for speed
+        # BLIP captions
         # -------------------------------------------------
         
-        captions = [""] * len(batch_imgs)
+        if captioner is not None:
+        
+            try:
+        
+                captions = captioner.caption(
+                    batch_imgs,
+                    batch_size=4
+                )
+        
+            except Exception as e:
+        
+                print(
+                    f"[Indexing] Caption generation failed: {e}"
+                )
+        
+                captions = [""] * len(batch_imgs)
+        
+        else:
+        
+            captions = [""] * len(batch_imgs)
 
         # -------------------------------------------------
         # add to index
