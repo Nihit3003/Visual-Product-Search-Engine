@@ -173,7 +173,7 @@ def set_seed(seed):
 # MULTI-CROP EMBEDDINGS
 # =========================================================
 
-@torch.no_grad()
+
 def encode_multicrop(
     model,
     imgs
