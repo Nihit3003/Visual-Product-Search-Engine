@@ -14,9 +14,12 @@ from __future__ import annotations
 import torch
 from PIL import Image
 
+# ADDED: BlipImageProcessor and AutoTokenizer
 from transformers import (
     Blip2Processor,
     Blip2ForConditionalGeneration,
+    BlipImageProcessor,
+    AutoTokenizer,
 )
 
 from transformers import (
@@ -64,11 +67,15 @@ class FashionCaptioner:
         # -------------------------------------------------
         # processor
         # -------------------------------------------------
-
-        self.processor = (
-            Blip2Processor.from_pretrained(
-                model_name
-            )
+        
+        # FIX: Manually load image_processor and tokenizer to 
+        # bypass the unexpected 'num_query_tokens' kwarg
+        image_processor = BlipImageProcessor.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        self.processor = Blip2Processor(
+            image_processor=image_processor,
+            tokenizer=tokenizer
         )
 
         # -------------------------------------------------
