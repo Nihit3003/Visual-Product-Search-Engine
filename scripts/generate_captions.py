@@ -106,7 +106,8 @@ class CaptionGenerator:
 
         self.processor = (
             Blip2Processor.from_pretrained(
-                model_id
+                model_name,
+                use_fast=False
             )
         )
 
