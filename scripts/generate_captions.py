@@ -90,33 +90,33 @@ class CaptionGenerator:
         model_id,
         max_new_tokens,
     ):
-
+    
         self.device = (
             "cuda"
             if torch.cuda.is_available()
             else "cpu"
         )
-
+    
         self.max_new_tokens = max_new_tokens
-
+    
         print(
             f"[BLIP-2] Loading "
             f"{model_id}"
         )
-
+    
         self.processor = (
             AutoProcessor.from_pretrained(
                 model_id,
                 use_fast=False
             )
         )
-
+    
         dtype = (
             torch.float16
             if self.device == "cuda"
             else torch.float32
         )
-
+    
         self.model = (
             Blip2ForConditionalGeneration
             .from_pretrained(
@@ -124,13 +124,13 @@ class CaptionGenerator:
                 torch_dtype=dtype,
             )
         ).to(self.device)
-
+    
         self.model.eval()
-
+    
         for p in self.model.parameters():
-
+    
             p.requires_grad_(False)
-
+    
         print(
             "[BLIP-2] Ready"
         )
