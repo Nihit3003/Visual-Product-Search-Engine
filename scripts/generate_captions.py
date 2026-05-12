@@ -15,7 +15,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from transformers import (
-    Blip2Processor,
+    AutoProcessor,
     Blip2ForConditionalGeneration,
 )
 
@@ -105,7 +105,7 @@ class CaptionGenerator:
         )
 
         self.processor = (
-            Blip2Processor.from_pretrained(
+            AutoProcessor.from_pretrained(
                 model_id,
                 use_fast=False
             )
