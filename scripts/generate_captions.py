@@ -1,330 +1,372 @@
 """
-Stable BLIP-2 + ITM wrapper.
-
-Fixes:
-- transformers compatibility
-- safer FP16 handling
-- stable batch inference
-- stronger caption prompts
-- robust fallback behavior
+Final offline BLIP caption generation
+for multimodal retrieval fusion.
 """
 
-from __future__ import annotations
+import argparse
+import json
+import sys
+from pathlib import Path
 
 import torch
+
 from PIL import Image
 
-# ADDED: BlipImageProcessor and AutoTokenizer
-from transformers import (
-    Blip2Processor,
-    Blip2ForConditionalGeneration,
-    BlipImageProcessor,
-    AutoTokenizer,
-)
+from tqdm import tqdm
 
 from transformers import (
-    BlipForImageTextRetrieval,
-    BlipProcessor,
+    AutoProcessor,
+    Blip2ForConditionalGeneration,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.dataset import (
+    parse_bboxes,
+    bbox_crop,
+)
+
+
+# =========================================================
+# ARGS
+# =========================================================
+
+def parse_args():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--dataset_root",
+        required=True,
+    )
+
+    parser.add_argument(
+        "--output_json",
+        required=True,
+    )
+
+    parser.add_argument(
+        "--model_id",
+        default="Salesforce/blip2-flan-t5-xl",
+    )
+
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=40,
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=2,
+    )
+
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+    )
+
+    return parser.parse_args()
 
 
 # =========================================================
 # CAPTIONER
 # =========================================================
 
-class FashionCaptioner:
+class CaptionGenerator:
 
     PROMPT = (
         "Describe the clothing item including "
-        "color, material, fit, texture, style, "
-        "and garment type."
+        "color, material, fit, texture, "
+        "style, pattern, and garment type."
     )
 
     def __init__(
         self,
-        model_name: str = "Salesforce/blip2-flan-t5-xl",
-        device: str = "cuda",
-        use_fp16: bool = True,
+        model_id,
+        max_new_tokens,
     ):
-
-        self.device = device
-
+    
+        self.device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else "cpu"
+        )
+    
+        self.max_new_tokens = max_new_tokens
+    
+        print(
+            f"[BLIP-2] Loading "
+            f"{model_id}"
+        )
+    
+        self.processor = (
+            AutoProcessor.from_pretrained(
+                model_id,
+                use_fast=False
+            )
+        )
+    
         dtype = (
             torch.float16
-            if (
-                use_fp16
-                and
-                device == "cuda"
-            )
+            if self.device == "cuda"
             else torch.float32
         )
-
-        print(
-            f"[BLIP-2] Loading captioner: "
-            f"{model_name}"
-        )
-
-        # -------------------------------------------------
-        # processor
-        # -------------------------------------------------
-        
-        # FIX: Manually load image_processor and tokenizer to 
-        # bypass the unexpected 'num_query_tokens' kwarg
-        image_processor = BlipImageProcessor.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        
-        self.processor = Blip2Processor(
-            image_processor=image_processor,
-            tokenizer=tokenizer
-        )
-
-        # -------------------------------------------------
-        # model
-        # -------------------------------------------------
-
+    
         self.model = (
             Blip2ForConditionalGeneration
             .from_pretrained(
-                model_name,
+                model_id,
                 torch_dtype=dtype,
             )
-        ).to(device)
-
+        ).to(self.device)
+    
         self.model.eval()
-
+    
         for p in self.model.parameters():
-
+    
             p.requires_grad_(False)
-
+    
         print(
-            "[BLIP-2] Captioner ready."
+            "[BLIP-2] Ready"
         )
 
     # =====================================================
-    # CAPTION
+    # GENERATE BATCH
     # =====================================================
 
     @torch.no_grad()
-    def caption(
+    def generate_batch(
         self,
-        images: list[Image.Image] | Image.Image,
-        batch_size: int = 4,
-    ) -> list[str]:
-
-        if isinstance(images, Image.Image):
-
-            images = [images]
-
-        outputs = []
-
-        for i in range(
-            0,
-            len(images),
-            batch_size
-        ):
-
-            batch = images[
-                i : i + batch_size
-            ]
-
-            try:
-
-                inputs = self.processor(
-                    images=batch,
-                    text=[
-                        self.PROMPT
-                    ] * len(batch),
-                    return_tensors="pt",
-                    padding=True,
-                ).to(self.device)
-
-                generated = self.model.generate(
-                    **inputs,
-                    max_new_tokens=40,
-                    num_beams=3,
-                )
-
-                decoded = (
-                    self.processor.batch_decode(
-                        generated,
-                        skip_special_tokens=True
-                    )
-                )
-
-                decoded = [
-                    d.strip()
-                    for d in decoded
-                ]
-
-                outputs.extend(decoded)
-
-            except Exception as e:
-
-                print(
-                    f"[BLIP-2] Batch failed: {e}"
-                )
-
-                outputs.extend(
-                    [""] * len(batch)
-                )
-
-        return outputs
-
-
-# =========================================================
-# ITM RERANKER
-# =========================================================
-
-class ITMReranker:
-
-    def __init__(
-        self,
-        model_name: str = "Salesforce/blip-itm-base-coco",
-        device: str = "cuda",
-        use_fp16: bool = True,
+        images,
     ):
 
-        self.device = device
+        inputs = self.processor(
+            images=images,
+            text=[
+                self.PROMPT
+            ] * len(images),
+            return_tensors="pt",
+            padding=True,
+        )
 
-        dtype = (
-            torch.float16
-            if (
-                use_fp16
-                and
-                device == "cuda"
+        inputs = {
+
+            k: v.to(self.device)
+
+            for k, v in inputs.items()
+        }
+
+        generated_ids = self.model.generate(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            num_beams=3,
+        )
+
+        captions = (
+            self.processor.batch_decode(
+                generated_ids,
+                skip_special_tokens=True
             )
-            else torch.float32
         )
-
-        print(
-            f"[BLIP-ITM] Loading "
-            f"{model_name}"
-        )
-
-        self.processor = (
-            BlipProcessor.from_pretrained(
-                model_name
-            )
-        )
-
-        self.model = (
-            BlipForImageTextRetrieval
-            .from_pretrained(
-                model_name,
-                torch_dtype=dtype,
-            )
-        ).to(device)
-
-        self.model.eval()
-
-        for p in self.model.parameters():
-
-            p.requires_grad_(False)
-
-        print(
-            "[BLIP-ITM] Ready."
-        )
-
-    # =====================================================
-    # SCORE
-    # =====================================================
-
-    @torch.no_grad()
-    def score(
-        self,
-        query_image: Image.Image,
-        captions: list[str],
-        batch_size: int = 8,
-    ) -> list[float]:
-
-        scores = []
-
-        for i in range(
-            0,
-            len(captions),
-            batch_size
-        ):
-
-            caps = captions[
-                i : i + batch_size
-            ]
-
-            try:
-
-                inputs = self.processor(
-                    images=[
-                        query_image
-                    ] * len(caps),
-                    text=caps,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                ).to(self.device)
-
-                out = self.model(
-                    **inputs,
-                    use_itm_head=True
-                )
-
-                probs = (
-                    out.itm_score
-                    .softmax(dim=-1)[:, 1]
-                )
-
-                scores.extend(
-                    probs.float()
-                    .cpu()
-                    .tolist()
-                )
-
-            except Exception as e:
-
-                print(
-                    f"[BLIP-ITM] "
-                    f"Batch failed: {e}"
-                )
-
-                scores.extend(
-                    [0.0] * len(caps)
-                )
-
-        return scores
-
-    # =====================================================
-    # RERANK
-    # =====================================================
-
-    def rerank(
-        self,
-        query_image: Image.Image,
-        candidates: list[dict],
-        caption_key: str = "caption",
-    ) -> list[dict]:
 
         captions = [
 
-            c.get(
-                caption_key,
-                ""
-            )
+            c.strip()
 
-            for c in candidates
+            for c in captions
         ]
 
-        scores = self.score(
-            query_image,
-            captions
+        return captions
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
+def main():
+
+    args = parse_args()
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+
+    torch.set_float32_matmul_precision(
+        "high"
+    )
+
+    dataset_root = Path(
+        args.dataset_root
+    )
+
+    img_root = dataset_root / "img"
+
+    bbox_map = parse_bboxes(
+        dataset_root /
+        "list_bbox_inshop.txt"
+    )
+
+    all_images = sorted(
+        img_root.rglob("*.jpg")
+    )
+
+    if args.limit is not None:
+
+        all_images = all_images[
+            :args.limit
+        ]
+
+    print(
+        f"[Data] Images: "
+        f"{len(all_images):,}"
+    )
+
+    captioner = CaptionGenerator(
+        model_id=args.model_id,
+        max_new_tokens=args.max_new_tokens,
+    )
+
+    results = {}
+
+    batch_imgs = []
+
+    batch_paths = []
+
+    # =====================================================
+    # FLUSH
+    # =====================================================
+
+    def flush():
+
+        if not batch_imgs:
+            return
+
+        try:
+
+            captions = (
+                captioner.generate_batch(
+                    batch_imgs
+                )
+            )
+
+            for rel_path, cap in zip(
+                batch_paths,
+                captions
+            ):
+
+                results[rel_path] = cap
+
+        except Exception as e:
+
+            print(
+                f"[BLIP-2] "
+                f"Batch failed: {e}"
+            )
+
+            for rel_path in batch_paths:
+
+                results[rel_path] = ""
+
+        batch_imgs.clear()
+
+        batch_paths.clear()
+
+    # =====================================================
+    # LOOP
+    # =====================================================
+
+    for path in tqdm(
+        all_images,
+        desc="Generating captions"
+    ):
+
+        try:
+
+            image = Image.open(
+                path
+            ).convert("RGB")
+
+            rel_path = str(
+                path.relative_to(img_root)
+            )
+
+            # -------------------------------------------------
+            # GT bbox crop
+            # -------------------------------------------------
+
+            bbox = bbox_map.get(
+                rel_path
+            )
+
+            if bbox is not None:
+
+                image = bbox_crop(
+                    image,
+                    bbox
+                )
+
+            batch_imgs.append(
+                image
+            )
+
+            batch_paths.append(
+                rel_path
+            )
+
+            # -------------------------------------------------
+            # flush
+            # -------------------------------------------------
+
+            if (
+                len(batch_imgs)
+                >=
+                args.batch_size
+            ):
+
+                flush()
+
+        except Exception as e:
+
+            print(
+                f"[ERROR] "
+                f"{path.name}: {e}"
+            )
+
+    flush()
+
+    # =====================================================
+    # SAVE
+    # =====================================================
+
+    output_path = Path(
+        args.output_json
+    )
+
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    with open(
+        output_path,
+        "w"
+    ) as f:
+
+        json.dump(
+            results,
+            f,
+            indent=2
         )
 
-        for cand, sc in zip(
-            candidates,
-            scores
-        ):
+    print(
+        f"\nSaved captions → "
+        f"{output_path}"
+    )
 
-            cand["itm_score"] = sc
 
-        return sorted(
-            candidates,
-            key=lambda x: x["itm_score"],
-            reverse=True
-        )
+if __name__ == "__main__":
+
+    main()
