@@ -1,6 +1,6 @@
 """
 Final Streamlit Demo
-ViT-L-14 Visual Product Search
+Multi-Region Visual Product Search
 """
 
 import argparse
@@ -13,27 +13,15 @@ import streamlit as st
 import torch
 import torch.nn.functional as F
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
-
 sys.path.insert(0, str(ROOT))
 
-from src.dataset import (
-    get_clip_transform
-)
-
-from src.index import (
-    HNSWIndex
-)
-
-from src.localizer import (
-    YOLOLocalizer
-)
-
-from src.model import (
-    VisualSearchModel
-)
+from src.dataset import get_clip_transform
+from src.index import HNSWIndex
+from src.localizer import YOLOLocalizer
+from src.model import VisualSearchModel
 
 
 # =========================================================
@@ -111,6 +99,7 @@ def apply_style():
             background: rgba(255,255,255,0.05);
             border-radius: 12px;
             padding: 0.5rem;
+            margin-top: 0.5rem;
         }
 
         </style>
@@ -196,7 +185,7 @@ def load_localizer(weights):
 
 
 # =========================================================
-# MULTI-CROP EMBEDDING
+# EMBEDDING
 # =========================================================
 
 @torch.no_grad()
@@ -290,6 +279,64 @@ def retrieve(
 
 
 # =========================================================
+# REGION PROPOSALS
+# =========================================================
+
+def generate_regions(image):
+
+    w, h = image.size
+
+    regions = []
+
+    # FULL
+    regions.append({
+        "label": "Full Outfit",
+        "crop": image
+    })
+
+    # UPPER
+    upper = image.crop((
+        0,
+        0,
+        w,
+        int(0.6 * h)
+    ))
+
+    regions.append({
+        "label": "Upper Body",
+        "crop": upper
+    })
+
+    # LOWER
+    lower = image.crop((
+        0,
+        int(0.4 * h),
+        w,
+        h
+    ))
+
+    regions.append({
+        "label": "Lower Body",
+        "crop": lower
+    })
+
+    # CENTER
+    center = image.crop((
+        int(0.15 * w),
+        int(0.15 * h),
+        int(0.85 * w),
+        int(0.85 * h)
+    ))
+
+    regions.append({
+        "label": "Center Garment",
+        "crop": center
+    })
+
+    return regions
+
+
+# =========================================================
 # MAIN
 # =========================================================
 
@@ -312,8 +359,11 @@ def main():
     )
 
     st.markdown(
-        "Upload a clothing image to retrieve "
-        "visually similar products."
+        """
+        Upload a fashion image.
+        
+        Select which clothing region to search.
+        """
     )
 
     st.markdown("---")
@@ -322,9 +372,7 @@ def main():
     # LOAD
     # =====================================================
 
-    with st.spinner(
-        "Loading models..."
-    ):
+    with st.spinner("Loading models..."):
 
         model, device = load_model(
             args.ckpt_path,
@@ -343,7 +391,7 @@ def main():
     left, right = st.columns([1, 2])
 
     # =====================================================
-    # LEFT
+    # LEFT PANEL
     # =====================================================
 
     with left:
@@ -361,52 +409,50 @@ def main():
 
             st.image(
                 image,
-                caption="Original",
+                caption="Uploaded Image",
                 use_container_width=True
             )
 
-            crop = image
+            st.markdown("---")
 
-            # -------------------------------------------------
-            # YOLO localization
-            # -------------------------------------------------
+            st.subheader(
+                "Select Clothing Region"
+            )
 
-            if localizer is not None:
+            regions = generate_regions(
+                image
+            )
 
-                try:
+            labels = [
+                r["label"]
+                for r in regions
+            ]
 
-                    det = localizer.detect(
-                        image
-                    )
+            selected = st.radio(
+                "Choose region",
+                labels
+            )
 
-                    crop = det["cropped"]
+            selected_crop = None
 
-                    conf = det.get(
-                        "confidence",
-                        0.0
-                    )
+            for r in regions:
 
-                    st.image(
-                        crop,
-                        caption=(
-                            f"Localized "
-                            f"(conf={conf:.2f})"
-                        ),
-                        use_container_width=True
-                    )
+                if r["label"] == selected:
 
-                except Exception as e:
+                    selected_crop = r["crop"]
 
-                    st.warning(
-                        f"YOLO failed: {e}"
-                    )
+            st.image(
+                selected_crop,
+                caption=selected,
+                use_container_width=True
+            )
 
             st.session_state[
                 "query_crop"
-            ] = crop
+            ] = selected_crop
 
     # =====================================================
-    # RIGHT
+    # RIGHT PANEL
     # =====================================================
 
     with right:
@@ -522,6 +568,7 @@ def main():
 
     st.caption(
         "ViT-L-14 • Hard Negative Fine-Tuning "
+        "• Multi-Region Retrieval "
         "• HNSW Retrieval • BLIP Fusion"
     )
 
