@@ -1,24 +1,6 @@
-# Technical Documentation
-## Visual Product Search Engine
-### DeepFashion In-Shop Clothes Retrieval — Visual Recognition Course Project
-
----
-
-## Table of Contents
-
-1. [Project Overview](#1-project-overview)
-2. [Repository Structure](#2-repository-structure)
-3. [Dataset Handling](#3-dataset-handling)
-4. [System Architecture — Offline Indexing](#4-system-architecture--offline-indexing)
-5. [System Architecture — Online Query](#5-system-architecture--online-query)
-6. [Model Design](#6-model-design)
-7. [Fine-Tuning Strategy](#7-fine-tuning-strategy)
-8. [Loss Function](#8-loss-function)
-9. [Vector Index](#9-vector-index)
-10. [Evaluation Protocol](#10-evaluation-protocol)
-11. [Ablation Study Design](#11-ablation-study-design)
-12. [Streamlit Demo Application](#12-streamlit-demo-application)
-13. [Engineering Decisions & Trade-offs](#13-engineering-decisions--trade-offs)
+# Visual Product Search Engine
+*DeepFashion In-Shop Clothes Retrieval — Visual Recognition Course Project* : 
+A query-by-image retrieval system for fashion products based on the DeepFashion In-Shop Clothes Retrieval dataset. Returns similar fashion items leveraging YOLO object detection, BLIP-2 captions, CLIP fusion embeddings, and an HNSW vector index. 
 
 ---
 
@@ -66,7 +48,7 @@ visual_search/
 │   └── visual_search_pipeline.ipynb  # End-to-end Kaggle notebook
 │
 ├── requirements.txt
-└── TECHNICAL_DOCS.md        # This file
+└── README.md        
 ```
 
 ---
@@ -348,11 +330,15 @@ All metrics reported as `mean ± std` across **4 seeds** (3–4 as required). Te
 
 ## 11. Ablation Study Design
 
-| ID | CLIP | Captions | Fine-tuned | Alpha |
-|----|------|----------|-----------|-------|
-| **A** | Frozen | None | No | 1.0 |
-| **B** | Frozen | BLIP-2 | No | 0.6 |
-| **C** | Fine-tuned | BLIP-2 | Yes | 0.6 |
+Results are reported as **mean ± standard deviation** across random seeds (roll numbers). Results for Config B and C are shown for the chosen $\alpha$ values.
+
+| Configuration | Alpha (α) | Recall@5 | Recall@10 | NDCG@10 | mAP@10 |
+| ------------- | --------- | -------- | --------- | ------- | ------ |
+| A: Vision-only (Baseline) | 1.0 | - | - | - | - |
+| B: Frozen CLIP + BLIP-2 | 0.3 | - | - | - | - |
+| B: Frozen CLIP + BLIP-2 | 0.7 | - | - | - | - |
+| C: Finetuned CLIP + BLIP-2 | 0.3 | - | - | - | - |
+| C: Finetuned CLIP + BLIP-2 | 0.7 | - | - | - | - |
 
 **Condition A** serves as the zero-cost baseline: off-the-shelf CLIP visual encoder, no text signals. This quantifies what pre-trained CLIP alone achieves on fashion retrieval.
 
