@@ -262,7 +262,7 @@ def encode_queries(
 
 
 # =========================================================
-# RUN CONDITION
+# RUN CONDITION (FIXED)
 # =========================================================
 
 def run_condition(
@@ -311,21 +311,77 @@ def run_condition(
 
     retrieved = []
 
-    for q_emb in tqdm(
-        q_embs,
-        desc="Searching"
+    # =====================================================
+    # SEARCH
+    # =====================================================
+
+    for q_idx, q_emb in enumerate(
+        tqdm(
+            q_embs,
+            desc="Searching"
+        )
     ):
+
+        query_path = query_paths[q_idx]
+
+        query_item = query_items[q_idx]
+
+        # -------------------------------------------------
+        # retrieve MORE than needed
+        # because duplicates/self-matches
+        # will be filtered out
+        # -------------------------------------------------
 
         candidates = index.search(
             q_emb,
-            top_k=15,
+            top_k=100,
             deduplicate_items=False,
         )
 
-        retrieved.append([
-            c["item_id"]
-            for c in candidates
-        ])
+        unique_items = []
+
+        seen_items = set()
+
+        # -------------------------------------------------
+        # CLEAN RANKING
+        # -------------------------------------------------
+
+        for c in candidates:
+
+            item_id = c["item_id"]
+
+            img_path = c["img_path"]
+
+            # ---------------------------------------------
+            # remove exact self-match
+            # ---------------------------------------------
+
+            if img_path == query_path:
+                continue
+
+            # ---------------------------------------------
+            # keep only ONE result per item
+            # ---------------------------------------------
+
+            if item_id in seen_items:
+                continue
+
+            seen_items.add(item_id)
+
+            unique_items.append(item_id)
+
+            # ---------------------------------------------
+            # stop once enough unique items
+            # ---------------------------------------------
+
+            if len(unique_items) == 15:
+                break
+
+        retrieved.append(unique_items)
+
+    # =====================================================
+    # EVALUATE
+    # =====================================================
 
     results = evaluate(
         query_ids=query_items,
