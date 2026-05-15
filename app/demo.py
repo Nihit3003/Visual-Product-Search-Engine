@@ -284,7 +284,8 @@ def retrieve(
 #Region Proposals
 
 def generate_regions(
-    image
+    image,
+    localizer
 ):
 
     regions = []
@@ -494,7 +495,8 @@ def main():
             )
 
             regions = generate_regions(
-                image
+                image,
+                localizer
             )
 
             labels = [
