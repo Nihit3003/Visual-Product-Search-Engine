@@ -37,6 +37,7 @@ class YOLOLocalizer:
 
     def __init__(
         self,
+        weights: str = None,  # ADDED THIS to fix the TypeError from demo.py
         conf_thresh: float = 0.20,
         padding_frac: float = 0.02,
     ):
