@@ -287,6 +287,10 @@ def retrieve(
 # REGION PROPOSALS
 # =========================================================
 
+# =========================================================
+# REGION PROPOSALS
+# =========================================================
+
 def generate_regions(
     image,
     localizer=None,
@@ -295,7 +299,7 @@ def generate_regions(
     regions = []
 
     # =====================================================
-    # FULL OUTFIT OPTION
+    # ALWAYS INCLUDE FULL IMAGE
     # =====================================================
 
     regions.append({
@@ -308,7 +312,7 @@ def generate_regions(
     })
 
     # =====================================================
-    # YOLO MULTI-DETECTION
+    # FASHION YOLO DETECTIONS
     # =====================================================
 
     if localizer is not None:
@@ -316,32 +320,45 @@ def generate_regions(
         try:
 
             detections = localizer.detect_all(
-                image
+                image,
+                max_regions=10,
+            )
+
+            print(
+                f"[YOLO] detections: "
+                f"{len(detections)}"
             )
 
             for idx, det in enumerate(
                 detections
             ):
 
-                bbox = det["bbox"]
-
                 label = det.get(
                     "label",
-                    f"Item {idx+1}"
+                    f"item_{idx+1}"
+                )
+
+                conf = det.get(
+                    "confidence",
+                    0.0
                 )
 
                 crop = det["crop"]
 
-                confidence = det.get(
-                    "confidence",
-                    0.0
+                bbox = det.get(
+                    "bbox",
+                    None
+                )
+
+                option_name = (
+                    f"{label} #{idx+1} "
+                    f"(conf={conf:.2f})"
                 )
 
                 regions.append({
 
                     "label":
-                        f"{label} #{idx+1} "
-                        f"(conf={confidence:.2f})",
+                        option_name,
 
                     "crop":
                         crop,
@@ -350,21 +367,26 @@ def generate_regions(
                         bbox,
 
                     "confidence":
-                        confidence,
+                        conf,
                 })
 
         except Exception as e:
 
             print(
-                "YOLO detection failed:",
+                "[YOLO ERROR]",
                 e
             )
 
     # =====================================================
-    # FALLBACK REGIONS
+    # FALLBACK ONLY IF YOLO FAILS
     # =====================================================
 
     if len(regions) == 1:
+
+        print(
+            "[Fallback] "
+            "No garment detections."
+        )
 
         w, h = image.size
 
@@ -401,7 +423,6 @@ def generate_regions(
         })
 
     return regions
-
 
 # =========================================================
 # MAIN
