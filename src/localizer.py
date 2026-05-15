@@ -1,17 +1,16 @@
 """
-Fashion-aware YOLO clothing localizer.
+Fashion-aware clothing localizer.
 
 Supports:
-- garment-level detection
-- multi-item retrieval
-- rider jacket retrieval
+- garment retrieval
+- upper/lower/full outfit retrieval
 - unseen image inference
-- fashion-specific localization
+- rider jacket retrieval
+- fashion-aware cropping
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from PIL import Image
 
 try:
@@ -157,117 +156,117 @@ class YOLOLocalizer:
 
         outputs = []
 
-        if (
-            results.boxes is None
-            or
-            len(results.boxes) == 0
-        ):
-
-            return outputs
-
         W, H = image.size
 
-        boxes = results.boxes
+        # =================================================
+        # YOLO DETECTIONS
+        # =================================================
 
-        for i, conf in enumerate(
-            boxes.conf.tolist()
+        if (
+            results.boxes is not None
+            and
+            len(results.boxes) > 0
         ):
 
-            cls_id = int(
-                boxes.cls[i].item()
-            )
+            boxes = results.boxes
 
-            label_name = str(
-                results.names[cls_id]
-            ).lower()
+            for i, conf in enumerate(
+                boxes.conf.tolist()
+            ):
 
-            # =====================================
-            # REMOVE NON-FASHION CLASSES
-            # =====================================
+                cls_id = int(
+                    boxes.cls[i].item()
+                )
 
-            blocked = {
+                label_name = str(
+                    results.names[cls_id]
+                ).lower()
 
-                "person",
-                "human",
-                "face",
-            }
+                # =========================================
+                # REMOVE NON-FASHION CLASSES
+                # =========================================
 
-            if label_name in blocked:
+                blocked = {
 
-                continue
+                    "person",
+                    "human",
+                    "face",
+                }
 
-            # =====================================
-            # BBOX
-            # =====================================
+                if label_name in blocked:
 
-            x1, y1, x2, y2 = (
+                    continue
 
-                boxes.xyxy[i]
-                .cpu()
-                .numpy()
-                .astype(int)
-                .tolist()
-            )
+                # =========================================
+                # BBOX
+                # =========================================
 
-            x1 = max(0, x1)
-            y1 = max(0, y1)
+                x1, y1, x2, y2 = (
 
-            x2 = min(W, x2)
-            y2 = min(H, y2)
+                    boxes.xyxy[i]
+                    .cpu()
+                    .numpy()
+                    .astype(int)
+                    .tolist()
+                )
 
-            if x2 <= x1 or y2 <= y1:
+                x1 = max(0, x1)
+                y1 = max(0, y1)
 
-                continue
+                x2 = min(W, x2)
+                y2 = min(H, y2)
 
-            bw = x2 - x1
-            bh = y2 - y1
+                if x2 <= x1 or y2 <= y1:
 
-            # =====================================
-            # TIGHTER CROPS
-            # =====================================
+                    continue
 
-            pad_w = int(
-                bw * self.padding_frac
-            )
+                bw = x2 - x1
+                bh = y2 - y1
 
-            pad_h = int(
-                bh * self.padding_frac
-            )
+                # =========================================
+                # TIGHTER CROPS
+                # =========================================
 
-            x1 = max(0, x1 + pad_w)
-            y1 = max(0, y1 + pad_h)
+                pad_w = int(
+                    bw * self.padding_frac
+                )
 
-            x2 = min(W, x2 - pad_w)
-            y2 = min(H, y2 - pad_h)
+                pad_h = int(
+                    bh * self.padding_frac
+                )
 
-            crop = image.crop((
-                x1,
-                y1,
-                x2,
-                y2
-            ))
+                x1 = max(0, x1 + pad_w)
+                y1 = max(0, y1 + pad_h)
 
-            outputs.append({
+                x2 = min(W, x2 - pad_w)
+                y2 = min(H, y2 - pad_h)
 
-                "bbox": [
+                crop = image.crop((
                     x1,
                     y1,
                     x2,
                     y2
-                ],
+                ))
 
-                "confidence": float(conf),
+                outputs.append({
 
-                "label": results.names[
-                    cls_id
-                ],
+                    "bbox": [
+                        x1,
+                        y1,
+                        x2,
+                        y2
+                    ],
 
-                "crop": crop,
-            })
+                    "confidence": float(conf),
 
-        # =====================================
+                    "label": label_name,
+
+                    "crop": crop,
+                })
+
+        # =================================================
         # SORT
-        # =====================================
+        # =================================================
 
         outputs = sorted(
             outputs,
@@ -275,7 +274,79 @@ class YOLOLocalizer:
             reverse=True
         )
 
-        return outputs[:max_regions]
+        # =================================================
+        # SEMANTIC REGIONS
+        # =================================================
+
+        upper_crop = image.crop((
+            0,
+            0,
+            W,
+            int(H * 0.55)
+        ))
+
+        lower_crop = image.crop((
+            0,
+            int(H * 0.45),
+            W,
+            H
+        ))
+
+        semantic_regions = [
+
+            {
+                "bbox": [
+                    0,
+                    0,
+                    W,
+                    H
+                ],
+
+                "confidence": 1.0,
+
+                "label": "full_outfit",
+
+                "crop": image,
+            },
+
+            {
+                "bbox": [
+                    0,
+                    0,
+                    W,
+                    int(H * 0.55)
+                ],
+
+                "confidence": 1.0,
+
+                "label": "upper_body",
+
+                "crop": upper_crop,
+            },
+
+            {
+                "bbox": [
+                    0,
+                    int(H * 0.45),
+                    W,
+                    H
+                ],
+
+                "confidence": 1.0,
+
+                "label": "lower_body",
+
+                "crop": lower_crop,
+            },
+        ]
+
+        # =================================================
+        # MERGE
+        # =================================================
+
+        final_outputs = semantic_regions + outputs
+
+        return final_outputs[:max_regions]
 
     # =====================================================
     # SIMPLE API
