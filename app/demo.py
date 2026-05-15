@@ -282,6 +282,10 @@ def retrieve(
 # REGION PROPOSALS
 # =========================================================
 
+# =========================================================
+# REGION PROPOSALS
+# =========================================================
+
 def generate_regions(
     image,
     localizer=None,
@@ -290,23 +294,27 @@ def generate_regions(
     regions = []
 
     # =====================================================
-    # FULL IMAGE OPTION
+    # FULL OUTFIT OPTION
     # =====================================================
 
     regions.append({
-        "label": "Full Outfit",
-        "crop": image,
+
+        "label":
+            "Full Outfit",
+
+        "crop":
+            image,
     })
 
     # =====================================================
-    # YOLO DETECTIONS
+    # YOLO MULTI-DETECTION
     # =====================================================
 
     if localizer is not None:
 
         try:
 
-            detections = localizer.detect(
+            detections = localizer.detect_all(
                 image
             )
 
@@ -321,28 +329,27 @@ def generate_regions(
                     f"Item {idx+1}"
                 )
 
-                x1, y1, x2, y2 = map(
-                    int,
-                    bbox
-                )
+                crop = det["crop"]
 
-                crop = image.crop((
-                    x1,
-                    y1,
-                    x2,
-                    y2
-                ))
+                confidence = det.get(
+                    "confidence",
+                    0.0
+                )
 
                 regions.append({
 
                     "label":
-                    f"{label} #{idx+1}",
+                        f"{label} #{idx+1} "
+                        f"(conf={confidence:.2f})",
 
                     "crop":
-                    crop,
+                        crop,
 
                     "bbox":
-                    bbox,
+                        bbox,
+
+                    "confidence":
+                        confidence,
                 })
 
         except Exception as e:
@@ -375,13 +382,21 @@ def generate_regions(
         ))
 
         regions.append({
-            "label": "Upper Body",
-            "crop": upper,
+
+            "label":
+                "Upper Body",
+
+            "crop":
+                upper,
         })
 
         regions.append({
-            "label": "Lower Body",
-            "crop": lower,
+
+            "label":
+                "Lower Body",
+
+            "crop":
+                lower,
         })
 
     return regions
