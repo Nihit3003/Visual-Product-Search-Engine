@@ -99,7 +99,6 @@ Training augmentations (applied only to the train split):
 - `RandomResizedCrop(224, scale=(0.7, 1.0))` — scale variation
 - `RandomHorizontalFlip()` — left-right symmetry
 - `ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1)` — lighting variation
-
 ---
 
 ## 4. System Architecture — Offline Indexing
