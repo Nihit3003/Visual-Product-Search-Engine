@@ -1,19 +1,17 @@
 """
-High-quality YOLO clothing localizer.
+Fashion-aware YOLO clothing localizer.
 
-Optimized for:
-- retrieval accuracy
-- ViT-L embeddings
-- upper-garment focus
-- reduced background leakage
-- region-aware retrieval
-- multi-item inference
+Supports:
+- garment-level detection
+- multi-item retrieval
+- rider jacket retrieval
+- unseen image inference
+- fashion-specific localization
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-import numpy as np
 from PIL import Image
 
 try:
@@ -28,19 +26,7 @@ except ImportError:
 
 
 # =========================================================
-# COCO IDS
-# =========================================================
-
-FASHION_COCO_IDS = {
-    0,   # person
-    27,  # backpack
-    31,  # handbag
-    32,  # tie
-}
-
-
-# =========================================================
-# CUDA CHECK
+# CUDA
 # =========================================================
 
 def _cuda_available():
@@ -62,25 +48,13 @@ def _cuda_available():
 
 class YOLOLocalizer:
 
-    """
-    Retrieval-oriented clothing localizer.
-
-    Key improvements:
-    - tighter retrieval crops
-    - upper-body prioritization
-    - multi-region outputs
-    - confidence-aware fallbacks
-    - reduced lower-body dominance
-    """
-
     def __init__(
         self,
-        weights: str = "yolov8n.pt",
-        conf_thresh: float = 0.22,
+        weights: str = "weights/fashion_yolo.pt",
+        conf_thresh: float = 0.20,
         iou_thresh: float = 0.45,
         device: str = "",
-        padding_frac: float = 0.025,
-        upper_body_bias: bool = True,
+        padding_frac: float = 0.02,
     ):
 
         if not _HAS_ULTRALYTICS:
@@ -90,15 +64,11 @@ class YOLOLocalizer:
             )
 
         self.conf_thresh = conf_thresh
-
         self.iou_thresh = iou_thresh
-
         self.padding_frac = padding_frac
 
-        self.upper_body_bias = upper_body_bias
-
         print(
-            f"[YOLO] Loading: {weights}"
+            f"[Fashion YOLO] Loading: {weights}"
         )
 
         self.model = _YOLO(weights)
@@ -117,7 +87,7 @@ class YOLOLocalizer:
         )
 
         print(
-            "[YOLO] Ready."
+            "[Fashion YOLO] Ready."
         )
 
     # =====================================================
@@ -149,38 +119,9 @@ class YOLOLocalizer:
 
                 "cropped":
                     image,
-
-                "full":
-                    image,
-
-                "upper":
-                    image,
-
-                "lower":
-                    image,
             }
 
         det = detections[0]
-
-        crop = det["crop"]
-
-        x1, y1, x2, y2 = det["bbox"]
-
-        h_box = y2 - y1
-
-        upper_crop = image.crop((
-            x1,
-            y1,
-            x2,
-            int(y1 + 0.58 * h_box)
-        ))
-
-        lower_crop = image.crop((
-            x1,
-            int(y1 + 0.42 * h_box),
-            x2,
-            y2
-        ))
 
         return {
 
@@ -194,26 +135,17 @@ class YOLOLocalizer:
                 det["label"],
 
             "cropped":
-                crop,
-
-            "full":
-                crop,
-
-            "upper":
-                upper_crop,
-
-            "lower":
-                lower_crop,
+                det["crop"],
         }
 
     # =====================================================
-    # MULTI DETECT
+    # MULTI GARMENT DETECT
     # =====================================================
 
     def detect_all(
         self,
         image: Image.Image,
-        max_regions: int = 6,
+        max_regions: int = 10,
     ):
 
         results = self.model(
@@ -222,8 +154,6 @@ class YOLOLocalizer:
             iou=self.iou_thresh,
             verbose=False,
         )[0]
-
-        W, H = image.size
 
         outputs = []
 
@@ -235,46 +165,49 @@ class YOLOLocalizer:
 
             return outputs
 
+        W, H = image.size
+
         boxes = results.boxes
 
         for i, conf in enumerate(
             boxes.conf.tolist()
         ):
-        
+
             cls_id = int(
                 boxes.cls[i].item()
             )
-        
+
             label_name = str(
                 results.names[cls_id]
             ).lower()
-        
-            # =========================================
-            # REMOVE ONLY NON-FASHION LABELS
-            # =========================================
-        
+
+            # =====================================
+            # REMOVE NON-FASHION CLASSES
+            # =====================================
+
             blocked = {
+
                 "person",
-                "face",
                 "human",
+                "face",
             }
-        
+
             if label_name in blocked:
+
                 continue
-        
-            xyxy = (
+
+            # =====================================
+            # BBOX
+            # =====================================
+
+            x1, y1, x2, y2 = (
+
                 boxes.xyxy[i]
                 .cpu()
                 .numpy()
                 .astype(int)
                 .tolist()
             )
-
-            x1, y1, x2, y2 = xyxy
-
-            # -------------------------------------------------
-            # clamp
-            # -------------------------------------------------
 
             x1 = max(0, x1)
             y1 = max(0, y1)
@@ -283,14 +216,15 @@ class YOLOLocalizer:
             y2 = min(H, y2)
 
             if x2 <= x1 or y2 <= y1:
+
                 continue
 
             bw = x2 - x1
             bh = y2 - y1
 
-            # -------------------------------------------------
-            # padding reduction
-            # -------------------------------------------------
+            # =====================================
+            # TIGHTER CROPS
+            # =====================================
 
             pad_w = int(
                 bw * self.padding_frac
@@ -305,26 +239,6 @@ class YOLOLocalizer:
 
             x2 = min(W, x2 - pad_w)
             y2 = min(H, y2 - pad_h)
-
-            # -------------------------------------------------
-            # upper-body prioritization
-            # -------------------------------------------------
-
-            if self.upper_body_bias:
-
-                refined_h = y2 - y1
-                refined_w = x2 - x1
-
-                aspect_ratio = (
-                    refined_h /
-                    max(refined_w, 1)
-                )
-
-                if aspect_ratio > 1.25:
-
-                    y2 = int(
-                        y1 + 0.68 * refined_h
-                    )
 
             crop = image.crop((
                 x1,
@@ -351,9 +265,9 @@ class YOLOLocalizer:
                 "crop": crop,
             })
 
-        # -------------------------------------------------
-        # sort by confidence
-        # -------------------------------------------------
+        # =====================================
+        # SORT
+        # =====================================
 
         outputs = sorted(
             outputs,
@@ -372,9 +286,11 @@ class YOLOLocalizer:
         image: Image.Image
     ):
 
-        return self.detect(
+        result = self.detect(
             image
-        )["cropped"]
+        )
+
+        return result["cropped"]
 
     # =====================================================
     # BATCH
