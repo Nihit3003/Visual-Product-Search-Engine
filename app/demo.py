@@ -287,10 +287,6 @@ def retrieve(
 # REGION PROPOSALS
 # =========================================================
 
-# =========================================================
-# REGION PROPOSALS
-# =========================================================
-
 def generate_regions(
     image,
     localizer=None,
@@ -312,7 +308,7 @@ def generate_regions(
     })
 
     # =====================================================
-    # FASHION YOLO DETECTIONS
+    # GARMENT DETECTIONS
     # =====================================================
 
     if localizer is not None:
@@ -325,8 +321,8 @@ def generate_regions(
             )
 
             print(
-                f"[YOLO] detections: "
-                f"{len(detections)}"
+                f"[YOLO] detections:"
+                f" {len(detections)}"
             )
 
             for idx, det in enumerate(
@@ -345,11 +341,6 @@ def generate_regions(
 
                 crop = det["crop"]
 
-                bbox = det.get(
-                    "bbox",
-                    None
-                )
-
                 option_name = (
                     f"{label} #{idx+1} "
                     f"(conf={conf:.2f})"
@@ -364,7 +355,10 @@ def generate_regions(
                         crop,
 
                     "bbox":
-                        bbox,
+                        det.get(
+                            "bbox",
+                            None
+                        ),
 
                     "confidence":
                         conf,
@@ -377,53 +371,7 @@ def generate_regions(
                 e
             )
 
-    # =====================================================
-    # FALLBACK ONLY IF YOLO FAILS
-    # =====================================================
-
-    if len(regions) == 1:
-
-        print(
-            "[Fallback] "
-            "No garment detections."
-        )
-
-        w, h = image.size
-
-        upper = image.crop((
-            0,
-            0,
-            w,
-            int(0.6 * h)
-        ))
-
-        lower = image.crop((
-            0,
-            int(0.4 * h),
-            w,
-            h
-        ))
-
-        regions.append({
-
-            "label":
-                "Upper Body",
-
-            "crop":
-                upper,
-        })
-
-        regions.append({
-
-            "label":
-                "Lower Body",
-
-            "crop":
-                lower,
-        })
-
     return regions
-
 # =========================================================
 # MAIN
 # =========================================================
