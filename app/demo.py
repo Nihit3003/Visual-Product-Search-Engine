@@ -281,20 +281,17 @@ def retrieve(
     return results
 
 
-# =========================================================
-# REGION PROPOSALS
-# =========================================================
+#Region Proposals
 
 def generate_regions(
-    image,
-    localizer=None,
+    image
 ):
 
     regions = []
 
-    # =====================================================
-    # ALWAYS INCLUDE FULL IMAGE
-    # =====================================================
+    # =========================================
+    # FULL IMAGE
+    # =========================================
 
     regions.append({
 
@@ -303,91 +300,112 @@ def generate_regions(
 
         "crop":
             image,
+
+        "bbox":
+            None,
+
+        "confidence":
+            1.0,
     })
 
-    # =====================================================
-    # GARMENT DETECTIONS
-    # =====================================================
+    # =========================================
+    # DETECT GARMENTS
+    # =========================================
 
-    if localizer is not None:
+    try:
 
-        try:
+        detections = localizer.detect_all(
+            image,
+            max_regions=10,
+        )
 
-            detections = localizer.detect_all(
-                image,
-                max_regions=10,
+        print("\nDETECTIONS FOUND:")
+        print(detections)
+
+    except Exception as e:
+
+        print("DETECTION ERROR:", e)
+
+        detections = []
+
+    # =========================================
+    # ADD DETECTED ITEMS
+    # =========================================
+
+    seen_labels = set()
+
+    for det in detections:
+
+        label = det.get(
+            "label",
+            "unknown"
+        )
+
+        conf = float(
+            det.get(
+                "confidence",
+                0.0
             )
+        )
 
-            print(
-                f"[YOLO] detections:"
-                f" {len(detections)}"
-            )
+        crop = det.get(
+            "crop",
+            None
+        )
 
-            seen_labels = set()
+        # =====================================
+        # FILTERS
+        # =====================================
 
-            for idx, det in enumerate(
-                detections
-            ):
-            
-                label = det.get(
-                    "label",
-                    f"item_{idx+1}"
-                )
-            
-                # =========================================
-                # SKIP DUPLICATE FULL OUTFIT
-                # =========================================
-            
-                if label == "full_outfit":
-            
-                    continue
-            
-                # =========================================
-                # REMOVE DUPLICATES
-                # =========================================
-            
-                if label in seen_labels:
-            
-                    continue
-            
-                seen_labels.add(label)
-            
-                conf = det.get(
-                    "confidence",
-                    0.0
-                )
-            
-                crop = det["crop"]
-            
-                option_name = (
-                    f"{label} "
-                    f"(conf={conf:.2f})"
-                )
-            
-                regions.append({
-            
-                    "label":
-                        option_name,
-            
-                    "crop":
-                        crop,
-            
-                    "bbox":
-                        det.get(
-                            "bbox",
-                            None
-                        ),
-            
-                    "confidence":
-                        conf,
-                })
+        if crop is None:
+            continue
 
-        except Exception as e:
+        if conf < 0.50:
+            continue
 
-            print(
-                "[YOLO ERROR]",
-                e
-            )
+        ignored = [
+
+            "sleeve",
+            "neckline",
+            "lapel",
+            "belt",
+            "pocket",
+            "collar",
+            "button",
+        ]
+
+        if label in ignored:
+            continue
+
+        if label in seen_labels:
+            continue
+
+        seen_labels.add(label)
+
+        # =====================================
+        # APPEND REGION
+        # =====================================
+
+        regions.append({
+
+            "label":
+                f"{label} ({conf:.2f})",
+
+            "crop":
+                crop,
+
+            "bbox":
+                det.get(
+                    "bbox",
+                    None
+                ),
+
+            "confidence":
+                conf,
+        })
+
+    print("\nFINAL REGIONS:")
+    print([r["label"] for r in regions])
 
     return regions
 
