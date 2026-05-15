@@ -245,47 +245,21 @@ class YOLOLocalizer:
                 boxes.cls[i].item()
             )
         
-            # =========================================
-            # OPTIONAL FASHION FILTER
-            # =========================================
-        
             label_name = str(
                 results.names[cls_id]
             ).lower()
         
-            allowed_labels = {
+            # =========================================
+            # REMOVE ONLY NON-FASHION LABELS
+            # =========================================
         
-                "shirt",
-                "tshirt",
-                "t-shirt",
-                "top",
-                "hoodie",
-                "sweater",
-                "sweatshirt",
-                "jacket",
-                "coat",
-                "blazer",
-                "vest",
-                "dress",
-                "skirt",
-                "pants",
-                "trousers",
-                "jeans",
-                "shorts",
-                "bag",
-                "handbag",
-                "shoe",
-                "sneaker",
-                "boot",
-                "tie",
+            blocked = {
+                "person",
+                "face",
+                "human",
             }
         
-            if (
-                len(results.names) > 10
-                and
-                label_name not in allowed_labels
-            ):
-        
+            if label_name in blocked:
                 continue
         
             xyxy = (
