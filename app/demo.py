@@ -4,6 +4,7 @@ Multi-Region Visual Product Search
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -68,7 +69,7 @@ def parse_args():
     p.add_argument(
         "--yolo_weights",
         type=str,
-        default="weights/fashion_yolo.pt",
+        default=str(ROOT / "weights" / "fashion_yolo.pt"),
     )
 
     return p.parse_args()
@@ -175,14 +176,17 @@ def load_index(index_dir):
 def load_localizer(weights):
 
     try:
-
-        return YOLOLocalizer(
-            weights=weights
-        )
+        # Check if the specific weights file exists
+        if weights and os.path.exists(weights):
+            return YOLOLocalizer(weights=weights)
+        else:
+            # Fallback to the default initialization (downloads Fashionpedia weights automatically)
+            print(f"Weights not found at {weights}, falling back to default YOLOLocalizer()")
+            return YOLOLocalizer()
 
     except Exception as e:
 
-        print(e)
+        print("Failed to initialize YOLOLocalizer:", e)
 
         return None
 
@@ -312,6 +316,10 @@ def generate_regions(
     # =========================================
     # DETECT GARMENTS
     # =========================================
+    
+    if localizer is None:
+        print("Localizer is not loaded. Returning Full Outfit only.")
+        return regions
 
     try:
 
@@ -339,30 +347,30 @@ def generate_regions(
 
         print("\nRAW DET:")
         print(det)
-    
+        
         label = det.get(
             "label",
             "unknown"
         )
-    
+        
         conf = float(
             det.get(
                 "confidence",
                 0.0
             )
         )
-    
+        
         crop = det.get(
             "crop",
             None
         )
-    
+        
         print("LABEL:", label)
         print("CONF:", conf)
         print("CROP TYPE:", type(crop))
-    
+        
         ignored = [
-    
+        
             "sleeve",
             "neckline",
             "lapel",
@@ -371,39 +379,39 @@ def generate_regions(
             "collar",
             "button",
         ]
-    
+        
         if label in ignored:
-    
+        
             print("IGNORED")
-    
+        
             continue
-    
+        
         if label in seen_labels:
-    
+        
             print("DUPLICATE")
-    
+        
             continue
-    
+        
         seen_labels.add(label)
-    
+        
         regions.append({
-    
+        
             "label":
                 f"{label} ({conf:.2f})",
-    
+        
             "crop":
                 crop if crop is not None else image,
-    
+        
             "bbox":
                 det.get(
                     "bbox",
                     None
                 ),
-    
+        
             "confidence":
                 conf,
         })
-    
+        
         print("APPENDED")
 
     print("\nFINAL REGIONS:")
