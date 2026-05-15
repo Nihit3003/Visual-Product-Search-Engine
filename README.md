@@ -333,11 +333,11 @@ Results are reported as **mean ± standard deviation** across random seeds (roll
 
 | Configuration | Alpha (α) | Recall@5 | Recall@10 | NDCG@10 | mAP@10 |
 | ------------- | --------- | -------- | --------- | ------- | ------ |
-| A: Vision-only (Baseline) | 1.0 | - | - | - | - |
-| B: Frozen CLIP + BLIP-2 | 0.3 | - | - | - | - |
-| B: Frozen CLIP + BLIP-2 | 0.7 | - | - | - | - |
-| C: Finetuned CLIP + BLIP-2 | 0.3 | - | - | - | - |
-| C: Finetuned CLIP + BLIP-2 | 0.7 | - | - | - | - |
+| A: Vision-only (Baseline) | 1.0 | 0.2162 ± 0.0004 | 0.2754 ± 0.0005 | 0.1846 ± 0.0005 | 0.1547 ± 0.0002 |
+| B: Frozen CLIP + BLIP-2 | 0.5 | 0.2485 ± 0.0002 | 0.3180 ± 0.0004 | 0.1993 ± 0.0005 | 0.1608 ± 0.0005 |
+| B: Frozen CLIP + BLIP-2 | 0.7 | 0.2672 ± 0.0002 | 0.3420 ± 0.0003 | 0.2143 ± 0.0005 | 0.1729 ± 0.0004 |
+| C: Finetuned CLIP + BLIP-2 | 0.5 | 0.9232 ± 0.0000 | 0.9447 ± 0.0000 | 0.8782 ± 0.0000 | 0.8565 ± 0.0000 |
+| C: Finetuned CLIP + BLIP-2 | 0.7 | 0.9420 ± 0.0000 | 0.9640 ± 0.0000 | 0.8961 ± 0.0000 | 0.8740 ± 0.0000 |
 
 **Condition A** serves as the zero-cost baseline: off-the-shelf CLIP visual encoder, no text signals. This quantifies what pre-trained CLIP alone achieves on fashion retrieval.
 
