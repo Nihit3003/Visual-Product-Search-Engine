@@ -65,7 +65,7 @@ def parse_args():
         default=12,
     )
 
-    parser.add_argument(
+    p.add_argument(
         "--yolo_weights",
         type=str,
         default="weights/fashion_yolo.pt",
