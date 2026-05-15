@@ -7,6 +7,7 @@ Optimized for:
 - upper-garment focus
 - reduced background leakage
 - region-aware retrieval
+- multi-item inference
 """
 
 from __future__ import annotations
@@ -16,9 +17,13 @@ import numpy as np
 from PIL import Image
 
 try:
+
     from ultralytics import YOLO as _YOLO
+
     _HAS_ULTRALYTICS = True
+
 except ImportError:
+
     _HAS_ULTRALYTICS = False
 
 
@@ -116,7 +121,7 @@ class YOLOLocalizer:
         )
 
     # =====================================================
-    # DETECT
+    # SINGLE DETECT
     # =====================================================
 
     def detect(
@@ -124,99 +129,12 @@ class YOLOLocalizer:
         image: Image.Image
     ) -> dict:
 
-        results = self.model(
+        detections = self.detect_all(
             image,
-            conf=self.conf_thresh,
-            iou=self.iou_thresh,
-            verbose=False,
-        )[0]
+            max_regions=1,
+        )
 
-        W, H = image.size
-
-        best_box = None
-
-        best_conf = 0.0
-
-        best_cls = None
-
-        # -------------------------------------------------
-        # detection selection
-        # -------------------------------------------------
-
-        if (
-            results.boxes is not None
-            and
-            len(results.boxes) > 0
-        ):
-
-            boxes = results.boxes
-
-            for i, conf in enumerate(
-                boxes.conf.tolist()
-            ):
-
-                cls_id = int(
-                    boxes.cls[i].item()
-                )
-
-                xyxy = (
-                    boxes.xyxy[i]
-                    .cpu()
-                    .numpy()
-                    .astype(int)
-                    .tolist()
-                )
-
-                x1, y1, x2, y2 = xyxy
-
-                area = max(
-                    (x2 - x1) * (y2 - y1),
-                    1
-                )
-
-                center_y = (
-                    y1 + y2
-                ) / 2
-
-                # -------------------------------------------------
-                # retrieval-aware scoring
-                # -------------------------------------------------
-
-                score = conf
-
-                # prefer larger torso-focused regions
-
-                score += (
-                    area / (W * H)
-                ) * 0.15
-
-                # avoid tiny detections
-
-                if area < 0.02 * (W * H):
-
-                    score -= 0.2
-
-                # slightly prefer upper-centered crops
-
-                score += (
-                    1.0 - center_y / H
-                ) * 0.05
-
-                if score > best_conf:
-
-                    best_conf = score
-
-                    best_box = xyxy
-
-                    best_cls = results.names[
-                        cls_id
-                    ]
-
-        # -------------------------------------------------
-        # fallback
-        # -------------------------------------------------
-
-        if best_box is None:
+        if len(detections) == 0:
 
             return {
 
@@ -242,155 +160,44 @@ class YOLOLocalizer:
                     image,
             }
 
-        # -------------------------------------------------
-        # refine crop
-        # -------------------------------------------------
+        det = detections[0]
 
-        x1, y1, x2, y2 = best_box
+        crop = det["crop"]
 
-        bw = x2 - x1
+        x1, y1, x2, y2 = det["bbox"]
 
-        bh = y2 - y1
+        h_box = y2 - y1
 
-        pad_w = int(
-            bw * self.padding_frac
-        )
+        upper_crop = image.crop((
+            x1,
+            y1,
+            x2,
+            int(y1 + 0.58 * h_box)
+        ))
 
-        pad_h = int(
-            bh * self.padding_frac
-        )
-
-        x1 = max(0, x1 + pad_w)
-        y1 = max(0, y1 + pad_h)
-
-        x2 = min(W, x2 - pad_w)
-        y2 = min(H, y2 - pad_h)
-
-        # -------------------------------------------------
-        # upper-body prioritization
-        # -------------------------------------------------
-
-        if self.upper_body_bias:
-
-            refined_h = y2 - y1
-
-            refined_w = x2 - x1
-
-            aspect_ratio = (
-                refined_h /
-                max(refined_w, 1)
-            )
-
-            # tall person crops
-            # often include irrelevant legs
-
-            if aspect_ratio > 1.25:
-
-                y2 = int(
-                    y1 + 0.68 * refined_h
-                )
-
-        # -------------------------------------------------
-        # safety clamp
-        # -------------------------------------------------
-
-        x1 = max(0, x1)
-        y1 = max(0, y1)
-
-        x2 = min(W, x2)
-        y2 = min(H, y2)
-
-        if x2 <= x1 or y2 <= y1:
-
-            final_box = None
-
-            cropped = image
-
-        else:
-
-            final_box = [
-
-                x1,
-                y1,
-                x2,
-                y2
-            ]
-
-            cropped = image.crop(
-                final_box
-            )
-
-        # -------------------------------------------------
-        # region crops
-        # -------------------------------------------------
-
-        if final_box is not None:
-
-            x1, y1, x2, y2 = final_box
-
-            h_box = y2 - y1
-
-            full_crop = image.crop((
-                x1,
-                y1,
-                x2,
-                y2
-            ))
-
-            upper_crop = image.crop((
-                x1,
-                y1,
-                x2,
-                int(y1 + 0.58 * h_box)
-            ))
-
-            lower_crop = image.crop((
-                x1,
-                int(y1 + 0.42 * h_box),
-                x2,
-                y2
-            ))
-
-        else:
-
-            full_crop = image
-
-            upper_crop = image
-
-            lower_crop = image
-
-        # -------------------------------------------------
-        # low-confidence fallback blending
-        # -------------------------------------------------
-
-        confidence = float(best_conf)
-
-        if confidence < 0.28:
-
-            cropped = image
-
-        # -------------------------------------------------
-        # final
-        # -------------------------------------------------
+        lower_crop = image.crop((
+            x1,
+            int(y1 + 0.42 * h_box),
+            x2,
+            y2
+        ))
 
         return {
 
             "box":
-                final_box,
+                det["bbox"],
 
             "confidence":
-                confidence,
+                det["confidence"],
 
             "class_name":
-                best_cls,
+                det["label"],
 
-            # backward compatibility
             "cropped":
-                cropped,
+                crop,
 
-            # region retrieval
             "full":
-                full_crop,
+                crop,
 
             "upper":
                 upper_crop,
@@ -398,6 +205,146 @@ class YOLOLocalizer:
             "lower":
                 lower_crop,
         }
+
+    # =====================================================
+    # MULTI DETECT
+    # =====================================================
+
+    def detect_all(
+        self,
+        image: Image.Image,
+        max_regions: int = 6,
+    ):
+
+        results = self.model(
+            image,
+            conf=self.conf_thresh,
+            iou=self.iou_thresh,
+            verbose=False,
+        )[0]
+
+        W, H = image.size
+
+        outputs = []
+
+        if (
+            results.boxes is None
+            or
+            len(results.boxes) == 0
+        ):
+
+            return outputs
+
+        boxes = results.boxes
+
+        for i, conf in enumerate(
+            boxes.conf.tolist()
+        ):
+
+            cls_id = int(
+                boxes.cls[i].item()
+            )
+
+            xyxy = (
+                boxes.xyxy[i]
+                .cpu()
+                .numpy()
+                .astype(int)
+                .tolist()
+            )
+
+            x1, y1, x2, y2 = xyxy
+
+            # -------------------------------------------------
+            # clamp
+            # -------------------------------------------------
+
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+
+            x2 = min(W, x2)
+            y2 = min(H, y2)
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            bw = x2 - x1
+            bh = y2 - y1
+
+            # -------------------------------------------------
+            # padding reduction
+            # -------------------------------------------------
+
+            pad_w = int(
+                bw * self.padding_frac
+            )
+
+            pad_h = int(
+                bh * self.padding_frac
+            )
+
+            x1 = max(0, x1 + pad_w)
+            y1 = max(0, y1 + pad_h)
+
+            x2 = min(W, x2 - pad_w)
+            y2 = min(H, y2 - pad_h)
+
+            # -------------------------------------------------
+            # upper-body prioritization
+            # -------------------------------------------------
+
+            if self.upper_body_bias:
+
+                refined_h = y2 - y1
+                refined_w = x2 - x1
+
+                aspect_ratio = (
+                    refined_h /
+                    max(refined_w, 1)
+                )
+
+                if aspect_ratio > 1.25:
+
+                    y2 = int(
+                        y1 + 0.68 * refined_h
+                    )
+
+            crop = image.crop((
+                x1,
+                y1,
+                x2,
+                y2
+            ))
+
+            outputs.append({
+
+                "bbox": [
+                    x1,
+                    y1,
+                    x2,
+                    y2
+                ],
+
+                "confidence": float(conf),
+
+                "label": results.names[
+                    cls_id
+                ],
+
+                "crop": crop,
+            })
+
+        # -------------------------------------------------
+        # sort by confidence
+        # -------------------------------------------------
+
+        outputs = sorted(
+            outputs,
+            key=lambda x: x["confidence"],
+            reverse=True
+        )
+
+        return outputs[:max_regions]
 
     # =====================================================
     # SIMPLE API
