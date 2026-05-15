@@ -120,6 +120,48 @@ class YOLOLocalizer:
                 det["label"]
             ).lower()
 
+            # =============================================
+            # IGNORE NON-SEARCHABLE PARTS
+            # =============================================
+
+            IGNORE_LABELS = {
+
+                # body parts
+                "arm",
+                "leg",
+                "face",
+                "hair",
+                "skin",
+
+                # tiny garment parts
+                "sleeve",
+                "neckline",
+                "lapel",
+                "pocket",
+                "zipper",
+                "button",
+                "buckle",
+                "bead",
+                "bow",
+                "fringe",
+                "rivet",
+                "ruffle",
+                "sequin",
+                "tassel",
+
+                # duplicate tiny regions
+                "collar",
+                "cuff",
+
+                # noisy detections
+                "logo",
+                "text",
+            }
+
+            if label in IGNORE_LABELS:
+
+                continue
+
             box = det["box"]
 
             x1 = int(box["xmin"])
