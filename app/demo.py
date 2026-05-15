@@ -282,56 +282,107 @@ def retrieve(
 # REGION PROPOSALS
 # =========================================================
 
-def generate_regions(image):
-
-    w, h = image.size
+def generate_regions(
+    image,
+    localizer=None,
+):
 
     regions = []
 
-    # FULL
+    # =====================================================
+    # FULL IMAGE OPTION
+    # =====================================================
+
     regions.append({
         "label": "Full Outfit",
-        "crop": image
+        "crop": image,
     })
 
-    # UPPER
-    upper = image.crop((
-        0,
-        0,
-        w,
-        int(0.6 * h)
-    ))
+    # =====================================================
+    # YOLO DETECTIONS
+    # =====================================================
 
-    regions.append({
-        "label": "Upper Body",
-        "crop": upper
-    })
+    if localizer is not None:
 
-    # LOWER
-    lower = image.crop((
-        0,
-        int(0.4 * h),
-        w,
-        h
-    ))
+        try:
 
-    regions.append({
-        "label": "Lower Body",
-        "crop": lower
-    })
+            detections = localizer.detect(
+                image
+            )
 
-    # CENTER
-    center = image.crop((
-        int(0.15 * w),
-        int(0.15 * h),
-        int(0.85 * w),
-        int(0.85 * h)
-    ))
+            for idx, det in enumerate(
+                detections
+            ):
 
-    regions.append({
-        "label": "Center Garment",
-        "crop": center
-    })
+                bbox = det["bbox"]
+
+                label = det.get(
+                    "label",
+                    f"Item {idx+1}"
+                )
+
+                x1, y1, x2, y2 = map(
+                    int,
+                    bbox
+                )
+
+                crop = image.crop((
+                    x1,
+                    y1,
+                    x2,
+                    y2
+                ))
+
+                regions.append({
+
+                    "label":
+                    f"{label} #{idx+1}",
+
+                    "crop":
+                    crop,
+
+                    "bbox":
+                    bbox,
+                })
+
+        except Exception as e:
+
+            print(
+                "YOLO detection failed:",
+                e
+            )
+
+    # =====================================================
+    # FALLBACK REGIONS
+    # =====================================================
+
+    if len(regions) == 1:
+
+        w, h = image.size
+
+        upper = image.crop((
+            0,
+            0,
+            w,
+            int(0.6 * h)
+        ))
+
+        lower = image.crop((
+            0,
+            int(0.4 * h),
+            w,
+            h
+        ))
+
+        regions.append({
+            "label": "Upper Body",
+            "crop": upper,
+        })
+
+        regions.append({
+            "label": "Lower Body",
+            "crop": lower,
+        })
 
     return regions
 
@@ -420,7 +471,8 @@ def main():
             )
 
             regions = generate_regions(
-                image
+                image,
+                localizer,
             )
 
             labels = [
