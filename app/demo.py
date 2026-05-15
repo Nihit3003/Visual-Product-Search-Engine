@@ -337,35 +337,32 @@ def generate_regions(
 
     for det in detections:
 
+        print("\nRAW DET:")
+        print(det)
+    
         label = det.get(
             "label",
             "unknown"
         )
-
+    
         conf = float(
             det.get(
                 "confidence",
                 0.0
             )
         )
-
+    
         crop = det.get(
             "crop",
             None
         )
-
-        # =====================================
-        # FILTERS
-        # =====================================
-
-        if crop is None:
-            continue
-
-        if conf < 0.50:
-            continue
-
+    
+        print("LABEL:", label)
+        print("CONF:", conf)
+        print("CROP TYPE:", type(crop))
+    
         ignored = [
-
+    
             "sleeve",
             "neckline",
             "lapel",
@@ -374,36 +371,40 @@ def generate_regions(
             "collar",
             "button",
         ]
-
+    
         if label in ignored:
+    
+            print("IGNORED")
+    
             continue
-
+    
         if label in seen_labels:
+    
+            print("DUPLICATE")
+    
             continue
-
+    
         seen_labels.add(label)
-
-        # =====================================
-        # APPEND REGION
-        # =====================================
-
+    
         regions.append({
-
+    
             "label":
                 f"{label} ({conf:.2f})",
-
+    
             "crop":
-                crop,
-
+                crop if crop is not None else image,
+    
             "bbox":
                 det.get(
                     "bbox",
                     None
                 ),
-
+    
             "confidence":
                 conf,
         })
+    
+        print("APPENDED")
 
     print("\nFINAL REGIONS:")
     print([r["label"] for r in regions])
