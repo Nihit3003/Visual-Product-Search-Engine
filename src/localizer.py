@@ -1,44 +1,32 @@
 """
-Fashion-aware clothing localizer.
-
-Supports:
-- garment retrieval
-- upper/lower/full outfit retrieval
-- unseen image inference
-- rider jacket retrieval
-- fashion-aware cropping
+Fashionpedia-based clothing localizer.
+Fine-grained garment detection for:
+- jackets
+- tshirts
+- jeans
+- dresses
+- ties
+- shoes
+- handbags
+etc.
 """
 
 from __future__ import annotations
 
 from PIL import Image
 
-try:
+import torch
 
-    from ultralytics import YOLO as _YOLO
-
-    _HAS_ULTRALYTICS = True
-
-except ImportError:
-
-    _HAS_ULTRALYTICS = False
+from transformers import pipeline
 
 
 # =========================================================
 # CUDA
 # =========================================================
 
-def _cuda_available():
+def _device():
 
-    try:
-
-        import torch
-
-        return torch.cuda.is_available()
-
-    except Exception:
-
-        return False
+    return 0 if torch.cuda.is_available() else -1
 
 
 # =========================================================
@@ -49,44 +37,25 @@ class YOLOLocalizer:
 
     def __init__(
         self,
-        weights: str = "weights/fashion_yolo.pt",
         conf_thresh: float = 0.20,
-        iou_thresh: float = 0.45,
-        device: str = "",
         padding_frac: float = 0.02,
     ):
 
-        if not _HAS_ULTRALYTICS:
-
-            raise ImportError(
-                "ultralytics not installed"
-            )
-
         self.conf_thresh = conf_thresh
-        self.iou_thresh = iou_thresh
         self.padding_frac = padding_frac
 
         print(
-            f"[Fashion YOLO] Loading: {weights}"
+            "[Fashionpedia] Loading detector..."
         )
 
-        self.model = _YOLO(weights)
-
-        self.model.to(
-
-            device
-
-            if device
-
-            else "cuda"
-
-            if _cuda_available()
-
-            else "cpu"
+        self.detector = pipeline(
+            "object-detection",
+            model="valentinafeve/yolos-fashionpedia",
+            device=_device(),
         )
 
         print(
-            "[Fashion YOLO] Ready."
+            "[Fashionpedia] Ready."
         )
 
     # =====================================================
@@ -96,7 +65,7 @@ class YOLOLocalizer:
     def detect(
         self,
         image: Image.Image
-    ) -> dict:
+    ):
 
         detections = self.detect_all(
             image,
@@ -107,38 +76,24 @@ class YOLOLocalizer:
 
             return {
 
-                "box":
-                    None,
-
-                "confidence":
-                    None,
-
-                "class_name":
-                    None,
-
-                "cropped":
-                    image,
+                "box": None,
+                "confidence": None,
+                "class_name": None,
+                "cropped": image,
             }
 
         det = detections[0]
 
         return {
 
-            "box":
-                det["bbox"],
-
-            "confidence":
-                det["confidence"],
-
-            "class_name":
-                det["label"],
-
-            "cropped":
-                det["crop"],
+            "box": det["bbox"],
+            "confidence": det["confidence"],
+            "class_name": det["label"],
+            "cropped": det["crop"],
         }
 
     # =====================================================
-    # MULTI GARMENT DETECT
+    # MULTI DETECT
     # =====================================================
 
     def detect_all(
@@ -147,122 +102,84 @@ class YOLOLocalizer:
         max_regions: int = 10,
     ):
 
-        results = self.model(
-            image,
-            conf=self.conf_thresh,
-            iou=self.iou_thresh,
-            verbose=False,
-        )[0]
-
         outputs = []
 
         W, H = image.size
 
-        # =================================================
-        # YOLO DETECTIONS
-        # =================================================
+        detections = self.detector(image)
 
-        if (
-            results.boxes is not None
-            and
-            len(results.boxes) > 0
-        ):
+        for det in detections:
 
-            boxes = results.boxes
+            score = float(det["score"])
 
-            for i, conf in enumerate(
-                boxes.conf.tolist()
-            ):
+            if score < self.conf_thresh:
 
-                cls_id = int(
-                    boxes.cls[i].item()
-                )
+                continue
 
-                label_name = str(
-                    results.names[cls_id]
-                ).lower()
+            label = str(
+                det["label"]
+            ).lower()
 
-                # =========================================
-                # REMOVE NON-FASHION CLASSES
-                # =========================================
+            box = det["box"]
 
-                blocked = {
+            x1 = int(box["xmin"])
+            y1 = int(box["ymin"])
+            x2 = int(box["xmax"])
+            y2 = int(box["ymax"])
 
-                    "person",
-                    "human",
-                    "face",
-                }
+            x1 = max(0, x1)
+            y1 = max(0, y1)
 
-                if label_name in blocked:
+            x2 = min(W, x2)
+            y2 = min(H, y2)
 
-                    continue
+            if x2 <= x1 or y2 <= y1:
 
-                # =========================================
-                # BBOX
-                # =========================================
+                continue
 
-                x1, y1, x2, y2 = (
+            bw = x2 - x1
+            bh = y2 - y1
 
-                    boxes.xyxy[i]
-                    .cpu()
-                    .numpy()
-                    .astype(int)
-                    .tolist()
-                )
+            # =============================================
+            # TIGHTER CROPS
+            # =============================================
 
-                x1 = max(0, x1)
-                y1 = max(0, y1)
+            pad_w = int(
+                bw * self.padding_frac
+            )
 
-                x2 = min(W, x2)
-                y2 = min(H, y2)
+            pad_h = int(
+                bh * self.padding_frac
+            )
 
-                if x2 <= x1 or y2 <= y1:
+            x1 = max(0, x1 + pad_w)
+            y1 = max(0, y1 + pad_h)
 
-                    continue
+            x2 = min(W, x2 - pad_w)
+            y2 = min(H, y2 - pad_h)
 
-                bw = x2 - x1
-                bh = y2 - y1
+            crop = image.crop((
+                x1,
+                y1,
+                x2,
+                y2
+            ))
 
-                # =========================================
-                # TIGHTER CROPS
-                # =========================================
+            outputs.append({
 
-                pad_w = int(
-                    bw * self.padding_frac
-                )
-
-                pad_h = int(
-                    bh * self.padding_frac
-                )
-
-                x1 = max(0, x1 + pad_w)
-                y1 = max(0, y1 + pad_h)
-
-                x2 = min(W, x2 - pad_w)
-                y2 = min(H, y2 - pad_h)
-
-                crop = image.crop((
+                "bbox": [
                     x1,
                     y1,
                     x2,
                     y2
-                ))
+                ],
 
-                outputs.append({
+                "confidence": score,
 
-                    "bbox": [
-                        x1,
-                        y1,
-                        x2,
-                        y2
-                    ],
+                "label": label,
 
-                    "confidence": float(conf),
-
-                    "label": label_name,
-
-                    "crop": crop,
-                })
+                "crop": crop,
+            })
 
         # =================================================
         # SORT
@@ -275,78 +192,26 @@ class YOLOLocalizer:
         )
 
         # =================================================
-        # SEMANTIC REGIONS
+        # ALWAYS INCLUDE FULL OUTFIT
         # =================================================
 
-        upper_crop = image.crop((
-            0,
-            0,
-            W,
-            int(H * 0.55)
-        ))
+        outputs.insert(0, {
 
-        lower_crop = image.crop((
-            0,
-            int(H * 0.45),
-            W,
-            H
-        ))
+            "bbox": [
+                0,
+                0,
+                W,
+                H
+            ],
 
-        semantic_regions = [
+            "confidence": 1.0,
 
-            {
-                "bbox": [
-                    0,
-                    0,
-                    W,
-                    H
-                ],
+            "label": "full_outfit",
 
-                "confidence": 1.0,
+            "crop": image,
+        })
 
-                "label": "full_outfit",
-
-                "crop": image,
-            },
-
-            {
-                "bbox": [
-                    0,
-                    0,
-                    W,
-                    int(H * 0.55)
-                ],
-
-                "confidence": 1.0,
-
-                "label": "upper_body",
-
-                "crop": upper_crop,
-            },
-
-            {
-                "bbox": [
-                    0,
-                    int(H * 0.45),
-                    W,
-                    H
-                ],
-
-                "confidence": 1.0,
-
-                "label": "lower_body",
-
-                "crop": lower_crop,
-            },
-        ]
-
-        # =================================================
-        # MERGE
-        # =================================================
-
-        final_outputs = semantic_regions + outputs
-
-        return final_outputs[:max_regions]
+        return outputs[:max_regions]
 
     # =====================================================
     # SIMPLE API
@@ -362,36 +227,6 @@ class YOLOLocalizer:
         )
 
         return result["cropped"]
-
-    # =====================================================
-    # BATCH
-    # =====================================================
-
-    def batch_detect(
-        self,
-        images,
-        batch_size=8,
-    ):
-
-        outputs = []
-
-        for i in range(
-            0,
-            len(images),
-            batch_size
-        ):
-
-            batch = images[
-                i : i + batch_size
-            ]
-
-            for img in batch:
-
-                outputs.append(
-                    self.detect(img)
-                )
-
-        return outputs
 
     # =====================================================
     # GT BBOX
