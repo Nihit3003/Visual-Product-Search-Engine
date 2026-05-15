@@ -323,41 +323,61 @@ def generate_regions(
                 f" {len(detections)}"
             )
 
+            seen_labels = set()
+
             for idx, det in enumerate(
                 detections
             ):
-
+            
                 label = det.get(
                     "label",
                     f"item_{idx+1}"
                 )
-
+            
+                # =========================================
+                # SKIP DUPLICATE FULL OUTFIT
+                # =========================================
+            
+                if label == "full_outfit":
+            
+                    continue
+            
+                # =========================================
+                # REMOVE DUPLICATES
+                # =========================================
+            
+                if label in seen_labels:
+            
+                    continue
+            
+                seen_labels.add(label)
+            
                 conf = det.get(
                     "confidence",
                     0.0
                 )
-
+            
                 crop = det["crop"]
-
+            
                 option_name = (
-                    f"{label} #{idx+1} "
+                    f"{label} "
                     f"(conf={conf:.2f})"
                 )
-
+            
                 regions.append({
-
+            
                     "label":
                         option_name,
-
+            
                     "crop":
                         crop,
-
+            
                     "bbox":
                         det.get(
                             "bbox",
                             None
                         ),
-
+            
                     "confidence":
                         conf,
                 })
