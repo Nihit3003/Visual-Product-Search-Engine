@@ -13,7 +13,7 @@ import streamlit as st
 import torch
 import torch.nn.functional as F
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -180,7 +180,9 @@ def load_localizer(weights):
             weights=weights
         )
 
-    except Exception:
+    except Exception as e:
+
+        print(e)
 
         return None
 
@@ -283,10 +285,6 @@ def retrieve(
 # REGION PROPOSALS
 # =========================================================
 
-# =========================================================
-# REGION PROPOSALS
-# =========================================================
-
 def generate_regions(
     image,
     localizer=None,
@@ -372,6 +370,8 @@ def generate_regions(
             )
 
     return regions
+
+
 # =========================================================
 # MAIN
 # =========================================================
