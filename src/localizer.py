@@ -240,11 +240,54 @@ class YOLOLocalizer:
         for i, conf in enumerate(
             boxes.conf.tolist()
         ):
-
+        
             cls_id = int(
                 boxes.cls[i].item()
             )
-
+        
+            # =========================================
+            # OPTIONAL FASHION FILTER
+            # =========================================
+        
+            label_name = str(
+                results.names[cls_id]
+            ).lower()
+        
+            allowed_labels = {
+        
+                "shirt",
+                "tshirt",
+                "t-shirt",
+                "top",
+                "hoodie",
+                "sweater",
+                "sweatshirt",
+                "jacket",
+                "coat",
+                "blazer",
+                "vest",
+                "dress",
+                "skirt",
+                "pants",
+                "trousers",
+                "jeans",
+                "shorts",
+                "bag",
+                "handbag",
+                "shoe",
+                "sneaker",
+                "boot",
+                "tie",
+            }
+        
+            if (
+                len(results.names) > 10
+                and
+                label_name not in allowed_labels
+            ):
+        
+                continue
+        
             xyxy = (
                 boxes.xyxy[i]
                 .cpu()
