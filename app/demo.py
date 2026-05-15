@@ -494,8 +494,7 @@ def main():
             )
 
             regions = generate_regions(
-                image,
-                localizer,
+                image
             )
 
             labels = [
